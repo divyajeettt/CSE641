@@ -28,10 +28,10 @@ if __name__ == "__main__":
     ]
 
     Architectures = [
-        # Resnet_Q1(),
+        Resnet_Q1(),
         # VGG_Q2(),
-        Inception_Q3(),
-    #     CustomNetwork_Q4()
+        # Inception_Q3(),
+        # CustomNetwork_Q4()
     ]
 
     for network in Architectures:
@@ -41,8 +41,8 @@ if __name__ == "__main__":
             lr=LEARNING_RATE
         )
 
-        # for dataset in imageDataset:
-        for dataset in audioDataset:
+        for dataset in imageDataset:
+        # for dataset in audioDataset:
         # for dataset in imageDataset + audioDataset:
             if dataset.datasplit == "train":
                 print(

@@ -80,9 +80,9 @@ class AudioDataset(Dataset):
         return waveform, AudioDataset.MAPPING[label]
 
 
-class ResnetBlock(nn.Module):
+class ResidualBlock(nn.Module):
     def __init__(self, dim: int, in_channels: int, out_channels: int, stride: int = 1) -> None:
-        super(ResnetBlock, self).__init__()
+        super(ResidualBlock, self).__init__()
 
         assert dim == 1 or dim == 2, "dim must be 1 or 2"
 
@@ -107,6 +107,7 @@ class ResnetBlock(nn.Module):
         out = self.layers(x)
         if out.shape != residual.shape:
             residual = self.residual_conv(residual)
+        # print("residual out:", residual.shape)
         return nn.functional.relu(out + residual)
 
 
@@ -116,47 +117,47 @@ class Resnet_Q1(nn.Module):
         super().__init__(*args, **kwargs)
 
         self.layers_1d = nn.Sequential(
-            ResnetBlock(dim=1, in_channels=1, out_channels=2),                  # Block-01:      1 x 10000 ->    2 x 10000
-            ResnetBlock(dim=1, in_channels=2, out_channels=2),                  # Block-02:      2 x 10000 ->    2 x 10000
-            ResnetBlock(dim=1, in_channels=2, out_channels=4, stride=3),        # Block-03:      2 x 10000 ->    4 x  3334
-            ResnetBlock(dim=1, in_channels=4, out_channels=4),                  # Block-04:      4 x  4445 ->    4 x  3334
-            ResnetBlock(dim=1, in_channels=4, out_channels=8, stride=2),        # Block-05:      4 x  3334 ->    8 x  1667
-            ResnetBlock(dim=1, in_channels=8, out_channels=8),                  # Block-06:      8 x  1667 ->    8 x  1667
-            ResnetBlock(dim=1, in_channels=8, out_channels=16, stride=2),       # Block-07:      8 x  1667 ->   16 x   834
-            ResnetBlock(dim=1, in_channels=16, out_channels=16),                # Block-08:     16 x   834 ->   16 x  1334
-            ResnetBlock(dim=1, in_channels=16, out_channels=32, stride=3),      # Block-09:     16 x   834 ->   32 x   278
-            ResnetBlock(dim=1, in_channels=32, out_channels=32),                # Block-10:     32 x   278 ->   32 x   278
-            ResnetBlock(dim=1, in_channels=32, out_channels=64, stride=2),      # Block-11:     32 x   278 ->   64 x   139
-            ResnetBlock(dim=1, in_channels=64, out_channels=64, stride=3),      # Block-12:     64 x   139 ->   64 x    47
-            ResnetBlock(dim=1, in_channels=64, out_channels=128, stride=2),     # Block-13:     64 x    47 ->  128 x    38
-            ResnetBlock(dim=1, in_channels=128, out_channels=128, stride=3),    # Block-14:    128 x    24 ->  128 x     8
-            ResnetBlock(dim=1, in_channels=128, out_channels=256, stride=2),    # Block-15:    128 x     8 ->  256 x     4
-            ResnetBlock(dim=1, in_channels=256, out_channels=256, stride=2),    # Block-16:    256 x     4 ->  256 x     2
-            ResnetBlock(dim=1, in_channels=256, out_channels=512, stride=2),    # Block-17:    256 x     2 ->  512 x     1
-            ResnetBlock(dim=1, in_channels=512, out_channels=512, stride=2),    # Block-18:    512 x     1 ->  512 x     1
+            ResidualBlock(dim=1, in_channels=1, out_channels=2),                  # Block-01:      1 x 10000 ->    2 x 10000
+            ResidualBlock(dim=1, in_channels=2, out_channels=2),                  # Block-02:      2 x 10000 ->    2 x 10000
+            ResidualBlock(dim=1, in_channels=2, out_channels=4, stride=3),        # Block-03:      2 x 10000 ->    4 x  3334
+            ResidualBlock(dim=1, in_channels=4, out_channels=4),                  # Block-04:      4 x  4445 ->    4 x  3334
+            ResidualBlock(dim=1, in_channels=4, out_channels=8, stride=2),        # Block-05:      4 x  3334 ->    8 x  1667
+            ResidualBlock(dim=1, in_channels=8, out_channels=8),                  # Block-06:      8 x  1667 ->    8 x  1667
+            ResidualBlock(dim=1, in_channels=8, out_channels=16, stride=2),       # Block-07:      8 x  1667 ->   16 x   834
+            ResidualBlock(dim=1, in_channels=16, out_channels=16),                # Block-08:     16 x   834 ->   16 x  1334
+            ResidualBlock(dim=1, in_channels=16, out_channels=32, stride=3),      # Block-09:     16 x   834 ->   32 x   278
+            ResidualBlock(dim=1, in_channels=32, out_channels=32),                # Block-10:     32 x   278 ->   32 x   278
+            ResidualBlock(dim=1, in_channels=32, out_channels=64, stride=2),      # Block-11:     32 x   278 ->   64 x   139
+            ResidualBlock(dim=1, in_channels=64, out_channels=64, stride=3),      # Block-12:     64 x   139 ->   64 x    47
+            ResidualBlock(dim=1, in_channels=64, out_channels=128, stride=2),     # Block-13:     64 x    47 ->  128 x    38
+            ResidualBlock(dim=1, in_channels=128, out_channels=128, stride=3),    # Block-14:    128 x    24 ->  128 x     8
+            ResidualBlock(dim=1, in_channels=128, out_channels=256, stride=2),    # Block-15:    128 x     8 ->  256 x     4
+            ResidualBlock(dim=1, in_channels=256, out_channels=256, stride=2),    # Block-16:    256 x     4 ->  256 x     2
+            ResidualBlock(dim=1, in_channels=256, out_channels=512, stride=2),    # Block-17:    256 x     2 ->  512 x     1
+            ResidualBlock(dim=1, in_channels=512, out_channels=512, stride=2),    # Block-18:    512 x     1 ->  512 x     1
             nn.Flatten(),
             nn.Linear(512, 35)
         )
 
         self.layers_2d = nn.Sequential(
-            ResnetBlock(dim=2, in_channels=3, out_channels=3),                  # Block-01:    3 x 32 x 32 ->    3 x 32 x 32
-            ResnetBlock(dim=2, in_channels=3, out_channels=16),                 # Block-02:    3 x 32 x 32 ->   16 x 32 x 32
-            ResnetBlock(dim=2, in_channels=16, out_channels=16),                # Block-03:   16 x 32 x 32 ->   16 x 32 x 32
-            ResnetBlock(dim=2, in_channels=16, out_channels=16),                # Block-04:   16 x 32 x 32 ->   16 x 32 x 32
-            ResnetBlock(dim=2, in_channels=16, out_channels=32, stride=2),      # Block-05:   16 x 32 x 32 ->   32 x 16 x 16
-            ResnetBlock(dim=2, in_channels=32, out_channels=32),                # Block-06:   32 x 16 x 16 ->   32 x 16 x 16
-            ResnetBlock(dim=2, in_channels=32, out_channels=32),                # Block-07:   32 x 16 x 16 ->   32 x 16 x 16
-            ResnetBlock(dim=2, in_channels=32, out_channels=64),                # Block-08:   32 x 16 x 16 ->   64 x  8 x  8
-            ResnetBlock(dim=2, in_channels=64, out_channels=64),                # Block-09:   64 x  8 x  8 ->   64 x  8 x  8
-            ResnetBlock(dim=2, in_channels=64, out_channels=64),                # Block-10:   64 x  8 x  8 ->   64 x  8 x  8
-            ResnetBlock(dim=2, in_channels=64, out_channels=128, stride=2),     # Block-11:   64 x  8 x  8 ->  128 x  4 x  4
-            ResnetBlock(dim=2, in_channels=128, out_channels=128),              # Block-12:  128 x  4 x  4 ->  128 x  4 x  4
-            ResnetBlock(dim=2, in_channels=128, out_channels=128),              # Block-13:  128 x  4 x  4 ->  128 x  4 x  4
-            ResnetBlock(dim=2, in_channels=128, out_channels=256, stride=2),    # Block-14:  128 x  4 x  4 ->  256 x  2 x  2
-            ResnetBlock(dim=2, in_channels=256, out_channels=256),              # Block-15:  256 x  2 x  2 ->  256 x  2 x  2
-            ResnetBlock(dim=2, in_channels=256, out_channels=256),              # Block-16:  256 x  2 x  2 ->  256 x  2 x  2
-            ResnetBlock(dim=2, in_channels=256, out_channels=512, stride=2),    # Block-17:  256 x  2 x  2 ->  512 x  1 x  1
-            ResnetBlock(dim=2, in_channels=512, out_channels=512),              # Block-18:  512 x  1 x  1 ->  512 x  1 x  1
+            ResidualBlock(dim=2, in_channels=3, out_channels=3),                  # Block-01:    3 x 32 x 32 ->    3 x 32 x 32
+            ResidualBlock(dim=2, in_channels=3, out_channels=16),                 # Block-02:    3 x 32 x 32 ->   16 x 32 x 32
+            ResidualBlock(dim=2, in_channels=16, out_channels=16),                # Block-03:   16 x 32 x 32 ->   16 x 32 x 32
+            ResidualBlock(dim=2, in_channels=16, out_channels=16),                # Block-04:   16 x 32 x 32 ->   16 x 32 x 32
+            ResidualBlock(dim=2, in_channels=16, out_channels=32, stride=2),      # Block-05:   16 x 32 x 32 ->   32 x 16 x 16
+            ResidualBlock(dim=2, in_channels=32, out_channels=32),                # Block-06:   32 x 16 x 16 ->   32 x 16 x 16
+            ResidualBlock(dim=2, in_channels=32, out_channels=32),                # Block-07:   32 x 16 x 16 ->   32 x 16 x 16
+            ResidualBlock(dim=2, in_channels=32, out_channels=64, stride=2),      # Block-08:   32 x 16 x 16 ->   64 x  8 x  8
+            ResidualBlock(dim=2, in_channels=64, out_channels=64),                # Block-09:   64 x  8 x  8 ->   64 x  8 x  8
+            ResidualBlock(dim=2, in_channels=64, out_channels=64),                # Block-10:   64 x  8 x  8 ->   64 x  8 x  8
+            ResidualBlock(dim=2, in_channels=64, out_channels=128, stride=2),     # Block-11:   64 x  8 x  8 ->  128 x  4 x  4
+            ResidualBlock(dim=2, in_channels=128, out_channels=128),              # Block-12:  128 x  4 x  4 ->  128 x  4 x  4
+            ResidualBlock(dim=2, in_channels=128, out_channels=128),              # Block-13:  128 x  4 x  4 ->  128 x  4 x  4
+            ResidualBlock(dim=2, in_channels=128, out_channels=256, stride=2),    # Block-14:  128 x  4 x  4 ->  256 x  2 x  2
+            ResidualBlock(dim=2, in_channels=256, out_channels=256),              # Block-15:  256 x  2 x  2 ->  256 x  2 x  2
+            ResidualBlock(dim=2, in_channels=256, out_channels=256),              # Block-16:  256 x  2 x  2 ->  256 x  2 x  2
+            ResidualBlock(dim=2, in_channels=256, out_channels=512, stride=2),    # Block-17:  256 x  2 x  2 ->  512 x  1 x  1
+            ResidualBlock(dim=2, in_channels=512, out_channels=512),              # Block-18:  512 x  1 x  1 ->  512 x  1 x  1
             nn.Flatten(),
             nn.Linear(512, 10)
         )
@@ -307,11 +308,33 @@ class CustomNetwork_Q4(nn.Module):
         super().__init__(*args, **kwargs)
 
         self.layers_1d = nn.Sequential(
-
+            ResidualBlock(dim=1, in_channels=1, out_channels=1, stride=3),
+            ResidualBlock(dim=1, in_channels=1, out_channels=1, stride=3),
+            InceptionBlock(dim=1, channels=1),
+            InceptionBlock(dim=1, channels=4),
+            ResidualBlock(dim=1, in_channels=16, out_channels=11, stride=3),
+            InceptionBlock(dim=1, channels=11),
+            ResidualBlock(dim=1, in_channels=44, out_channels=29, stride=3),
+            InceptionBlock(dim=1, channels=29),
+            ResidualBlock(dim=1, in_channels=116, out_channels=76, stride=3),
+            InceptionBlock(dim=1, channels=76),
+            nn.Flatten(),
+            nn.Linear(12768, 35)
         )
 
         self.layers_2d = nn.Sequential(
-
+            ResidualBlock(dim=2, in_channels=3, out_channels=2, stride=2),
+            ResidualBlock(dim=2, in_channels=2, out_channels=2, stride=2),
+            InceptionBlock(dim=2, channels=2),
+            InceptionBlock(dim=2, channels=8),
+            ResidualBlock(dim=2, in_channels=32, out_channels=21, stride=2),
+            InceptionBlock(dim=2, channels=21),
+            ResidualBlock(dim=2, in_channels=84, out_channels=55, stride=2),
+            InceptionBlock(dim=2, channels=55),
+            ResidualBlock(dim=2, in_channels=220, out_channels=143, stride=2),
+            InceptionBlock(dim=2, channels=143),
+            nn.Flatten(),
+            nn.Linear(572, 10)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
