@@ -28,12 +28,11 @@ if __name__ == "__main__":
     ]
 
     Architectures = [
-        Resnet_Q1(),
-    ]
-    #     VGG_Q2(),
-    #     Inception_Q3(),
+        # Resnet_Q1(),
+        # VGG_Q2(),
+        Inception_Q3(),
     #     CustomNetwork_Q4()
-    # ]
+    ]
 
     for network in Architectures:
         criterion = nn.CrossEntropyLoss()
@@ -42,6 +41,7 @@ if __name__ == "__main__":
             lr=LEARNING_RATE
         )
 
+        # for dataset in imageDataset:
         for dataset in audioDataset:
         # for dataset in imageDataset + audioDataset:
             if dataset.datasplit == "train":
@@ -109,4 +109,11 @@ if __name__ == "__main__":
                     shuffle=True,
                     num_workers=2,
                     drop_last=True
+                )
+                evaluator(
+                    gpu=A.gpu,
+                    dataloader=test_dataloader,
+                    network=network,
+                    criterion=None,
+                    optimizer=None
                 )
