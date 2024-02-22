@@ -83,63 +83,7 @@ class AudioDataset(Dataset):
         return waveform, AudioDataset.MAPPING[label]
 
 
-class CNA(nn.Module):
-    def __init__(self, dim: int, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, padding: int = 0) -> None:
-        super(CNA, self).__init__()
-
-        self.dim = dim
-        assert self.dim == 1 or self.dim == 2, "dim must be 1 or 2"
-
-        Conv = eval(f"nn.Conv{self.dim}d")
-        BatchNorm = eval(f"nn.BatchNorm{self.dim}d")
-
-        self.layers = nn.Sequential(
-            Conv(in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=False),
-            BatchNorm(out_channels),
-            nn.ReLU(inplace=True)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
-
-
-class InceptionBlock(nn.Module):
-    def __init__(self, dim: int, channels: int) -> None:
-        super(InceptionBlock, self).__init__()
-
-        self.dim = dim
-        assert self.dim == 1 or self.dim == 2, "dim must be 1 or 2"
-
-        self.branch1 = CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=1)
-        self.branch2 = nn.Sequential(
-            CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=3, padding=2),
-            CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=5, padding=1)
-        )
-        self.branch3 = nn.Sequential(
-            CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=3, padding=2),
-            CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=5, padding=1)
-        )
-        MaxPool = eval(f"nn.MaxPool{self.dim}d")
-        self.branch4 = MaxPool(3, stride=1, padding=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # print("x", x.shape)
-        branch1 = self.branch1(x)
-        # print("branch1", branch1.shape)
-        branch2 = self.branch2(x)
-        # print("branch2", branch2.shape)
-        branch3 = self.branch3(x)
-        # print("branch3", branch3.shape)
-        branch4 = self.branch4(x)
-        # print("branch4", branch4.shape)
-        return torch.cat((branch1, branch2, branch3, branch4), 1)
-
-
 class ResnetBlock(nn.Module):
-    """
-    Represents a Residual-Network block built using the given specifications
-    """
-
     def __init__(self, dim: int, in_channels: int, out_channels: int, stride: int = 1) -> None:
         super(ResnetBlock, self).__init__()
 
@@ -178,24 +122,24 @@ class Resnet_Q1(nn.Module):
 
         # process raw resampled audio
         self.layers_1d = nn.Sequential(
-            ResnetBlock(dim=1, in_channels=1, out_channels=2, stride=1),        # Block-01:      1 x 16000 ->    2 x 16000
-            ResnetBlock(dim=1, in_channels=2, out_channels=2, stride=1),        # Block-02:      2 x 16000 ->    2 x 16000
-            ResnetBlock(dim=1, in_channels=2, out_channels=4, stride=3),        # Block-03:      2 x 16000 ->    4 x  5334
-            ResnetBlock(dim=1, in_channels=4, out_channels=4, stride=1),        # Block-04:      4 x  5334 ->    4 x  5334
-            ResnetBlock(dim=1, in_channels=4, out_channels=8, stride=2),        # Block-05:      4 x  5334 ->    8 x  2667
-            ResnetBlock(dim=1, in_channels=8, out_channels=8, stride=1),        # Block-06:      8 x  2667 ->    8 x  2667
-            ResnetBlock(dim=1, in_channels=8, out_channels=16, stride=2),       # Block-07:      8 x  2667 ->   16 x  1334
-            ResnetBlock(dim=1, in_channels=16, out_channels=16, stride=1),      # Block-08:     16 x  1334 ->   16 x  1334
-            ResnetBlock(dim=1, in_channels=16, out_channels=32, stride=3),      # Block-09:     16 x  1334 ->   32 x   445
-            ResnetBlock(dim=1, in_channels=32, out_channels=32, stride=1),      # Block-10:     32 x   445 ->   32 x   445
-            ResnetBlock(dim=1, in_channels=32, out_channels=64, stride=2),      # Block-11:     32 x   445 ->   64 x   223
-            ResnetBlock(dim=1, in_channels=64, out_channels=64, stride=3),      # Block-12:     64 x   223 ->   64 x    75
-            ResnetBlock(dim=1, in_channels=64, out_channels=128, stride=2),     # Block-13:     64 x    75 ->  128 x    38
-            ResnetBlock(dim=1, in_channels=128, out_channels=128, stride=3),    # Block-14:    128 x    38 ->  128 x    13
-            ResnetBlock(dim=1, in_channels=128, out_channels=256, stride=2),    # Block-15:    128 x    13 ->  256 x     7
-            ResnetBlock(dim=1, in_channels=256, out_channels=256, stride=2),    # Block-16:    256 x     7 ->  256 x     4
-            ResnetBlock(dim=1, in_channels=256, out_channels=512, stride=2),    # Block-17:    256 x     4 ->  512 x     2
-            ResnetBlock(dim=1, in_channels=512, out_channels=512, stride=2),    # Block-18:    512 x     2 ->  512 x     1
+            ResnetBlock(dim=1, in_channels=1, out_channels=2, stride=1),        # Block-01:      1 x 10000 ->    2 x 10000
+            ResnetBlock(dim=1, in_channels=2, out_channels=2, stride=1),        # Block-02:      2 x 10000 ->    2 x 10000
+            ResnetBlock(dim=1, in_channels=2, out_channels=4, stride=3),        # Block-03:      2 x 10000 ->    4 x  3334
+            ResnetBlock(dim=1, in_channels=4, out_channels=4, stride=1),        # Block-04:      4 x  4445 ->    4 x  3334
+            ResnetBlock(dim=1, in_channels=4, out_channels=8, stride=2),        # Block-05:      4 x  3334 ->    8 x  1667
+            ResnetBlock(dim=1, in_channels=8, out_channels=8, stride=1),        # Block-06:      8 x  1667 ->    8 x  1667
+            ResnetBlock(dim=1, in_channels=8, out_channels=16, stride=2),       # Block-07:      8 x  1667 ->   16 x   834
+            ResnetBlock(dim=1, in_channels=16, out_channels=16, stride=1),      # Block-08:     16 x   834 ->   16 x  1334
+            ResnetBlock(dim=1, in_channels=16, out_channels=32, stride=3),      # Block-09:     16 x   834 ->   32 x   278
+            ResnetBlock(dim=1, in_channels=32, out_channels=32, stride=1),      # Block-10:     32 x   278 ->   32 x   278
+            ResnetBlock(dim=1, in_channels=32, out_channels=64, stride=2),      # Block-11:     32 x   278 ->   64 x   139
+            ResnetBlock(dim=1, in_channels=64, out_channels=64, stride=3),      # Block-12:     64 x   139 ->   64 x    47
+            ResnetBlock(dim=1, in_channels=64, out_channels=128, stride=2),     # Block-13:     64 x    47 ->  128 x    38
+            ResnetBlock(dim=1, in_channels=128, out_channels=128, stride=3),    # Block-14:    128 x    24 ->  128 x     8
+            ResnetBlock(dim=1, in_channels=128, out_channels=256, stride=2),    # Block-15:    128 x     8 ->  256 x     4
+            ResnetBlock(dim=1, in_channels=256, out_channels=256, stride=2),    # Block-16:    256 x     4 ->  256 x     2
+            ResnetBlock(dim=1, in_channels=256, out_channels=512, stride=2),    # Block-17:    256 x     2 ->  512 x     1
+            ResnetBlock(dim=1, in_channels=512, out_channels=512, stride=2),    # Block-18:    512 x     1 ->  512 x     1
             nn.Flatten(),
             nn.Linear(512, 35)
         )
@@ -255,40 +199,37 @@ class Resnet_Q1(nn.Module):
         return self.layers_1d(x) if x.shape[1] == 1 else self.layers_2d(x)
 
 
+class VGGBlock(nn.Module):
+    def __init__(self, dim: int, num_convs: int, in_channels: int, out_channels: int, kernel_size: int, padding: int = 0) -> None:
+        super(VGGBlock, self).__init__()
+
+        self.dim = dim
+        assert self.dim == 1 or self.dim == 2, "dim must be 1 or 2"
+
+        Conv = eval(f"nn.Conv{self.dim}d")
+        MaxPool = eval(f"nn.MaxPool{self.dim}d")
+
+        layers = [Conv(in_channels, out_channels, kernel_size, padding=padding)]
+        for _ in range(num_convs - 1):
+            layers.append(Conv(out_channels, out_channels, kernel_size, padding=padding))
+        layers.append(MaxPool(kernel_size, ceil_mode=True))
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
+
+
 class VGG_Q2(nn.Module):
     def __init__(self,
                  *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.layers_1d = nn.Sequential(
-            nn.Sequential(
-                nn.Conv1d(256, 256, 4, stride=1, padding=1),
-                nn.Conv1d(256, 256, 4, stride=1, padding=1),
-                nn.MaxPool1d(4, ceil_mode=True)
-            ),
-            nn.Sequential(
-                nn.Conv1d(256, 167, 5, stride=1, padding=1),
-                nn.Conv1d(167, 167, 5, stride=1, padding=1),
-                nn.MaxPool1d(5, ceil_mode=True)
-            ),
-            nn.Sequential(
-                nn.Conv1d(167, 109, 7, stride=1, padding=1),
-                nn.Conv1d(109, 109, 7, stride=1, padding=1),
-                nn.Conv1d(109, 109, 7, stride=1, padding=1),
-                nn.MaxPool1d(7, ceil_mode=True)
-            ),
-            nn.Sequential(
-                nn.Conv1d(109, 71, 9, stride=1, padding=1),
-                nn.Conv1d(71, 71, 9, stride=1, padding=1),
-                nn.Conv1d(71, 71, 9, stride=1, padding=1),
-                nn.MaxPool1d(9, ceil_mode=True)
-            ),
-            nn.Sequential(
-                nn.Conv1d(71, 47, 12, stride=1, padding=4),
-                nn.Conv1d(47, 47, 12, stride=1, padding=4),
-                nn.Conv1d(47, 47, 12, stride=1, padding=4),
-                nn.MaxPool1d(12, ceil_mode=True)
-            ),
+            VGGBlock(dim=1, num_convs=2, in_channels=256, out_channels=256, kernel_size=4, padding=5),
+            VGGBlock(dim=1, num_convs=2, in_channels=256, out_channels=167, kernel_size=5, padding=5),
+            VGGBlock(dim=1, num_convs=3, in_channels=167, out_channels=109, kernel_size=7, padding=5),
+            VGGBlock(dim=1, num_convs=3, in_channels=109, out_channels=71, kernel_size=9, padding=5),
+            VGGBlock(dim=1, num_convs=3, in_channels=71, out_channels=47, kernel_size=12, padding=5),
             nn.Flatten(),
             nn.Sequential(
                 nn.Linear(47, 43),
@@ -298,34 +239,11 @@ class VGG_Q2(nn.Module):
         )
 
         self.layers_2d = nn.Sequential(
-            nn.Sequential(
-                nn.Conv2d(512, 512, 3, stride=1, padding=1),
-                nn.Conv2d(512, 512, 3, stride=1, padding=1),
-                nn.MaxPool2d(3, ceil_mode=True)
-            ),
-            nn.Sequential(
-                nn.Conv2d(512, 333, 4, stride=1, padding=1),
-                nn.Conv2d(333, 333, 4, stride=1, padding=1),
-                nn.MaxPool2d(4, ceil_mode=True)
-            ),
-            nn.Sequential(
-                nn.Conv2d(333, 217, 5, stride=1, padding=2),
-                nn.Conv2d(217, 217, 5, stride=1, padding=2),
-                nn.Conv2d(217, 217, 5, stride=1, padding=2),
-                nn.MaxPool2d(5, ceil_mode=True)
-            ),
-            nn.Sequential(
-                nn.Conv2d(217, 142, 7, stride=1, padding=3),
-                nn.Conv2d(142, 142, 7, stride=1, padding=3),
-                nn.Conv2d(142, 142, 7, stride=1, padding=3),
-                nn.MaxPool2d(7, ceil_mode=True)
-            ),
-            nn.Sequential(
-                nn.Conv2d(142, 93, 9, stride=1, padding=4),
-                nn.Conv2d(93, 93, 9, stride=1, padding=4),
-                nn.Conv2d(93, 93, 9, stride=1, padding=4),
-                nn.MaxPool2d(9, ceil_mode=True)
-            ),
+            VGGBlock(dim=2, num_convs=2, in_channels=512, out_channels=512, kernel_size=3, padding=1),
+            VGGBlock(dim=2, num_convs=2, in_channels=512, out_channels=333, kernel_size=4, padding=1),
+            VGGBlock(dim=2, num_convs=3, in_channels=333, out_channels=217, kernel_size=5, padding=2),
+            VGGBlock(dim=2, num_convs=3, in_channels=217, out_channels=142, kernel_size=7, padding=3),
+            VGGBlock(dim=2, num_convs=3, in_channels=142, out_channels=93, kernel_size=9, padding=4),
             nn.Flatten(),
             nn.Sequential(
                 nn.Linear(93, 50),
@@ -341,6 +259,58 @@ class VGG_Q2(nn.Module):
             return self.layers_2d(x.repeat(1, 512//3+1, 1, 1)[:, :-1, :, :])
 
 
+class CNA(nn.Module):
+    def __init__(self, dim: int, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, padding: int = 0) -> None:
+        super(CNA, self).__init__()
+
+        self.dim = dim
+        assert self.dim == 1 or self.dim == 2, "dim must be 1 or 2"
+
+        Conv = eval(f"nn.Conv{self.dim}d")
+        BatchNorm = eval(f"nn.BatchNorm{self.dim}d")
+
+        self.layers = nn.Sequential(
+            Conv(in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=False),
+            BatchNorm(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
+
+
+class InceptionBlock(nn.Module):
+    def __init__(self, dim: int, channels: int) -> None:
+        super(InceptionBlock, self).__init__()
+
+        self.dim = dim
+        assert self.dim == 1 or self.dim == 2, "dim must be 1 or 2"
+
+        self.branch1 = CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=1)
+        self.branch2 = nn.Sequential(
+            CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=3, padding=2),
+            CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=5, padding=1)
+        )
+        self.branch3 = nn.Sequential(
+            CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=3, padding=2),
+            CNA(dim=self.dim, in_channels=channels, out_channels=channels, kernel_size=5, padding=1)
+        )
+        MaxPool = eval(f"nn.MaxPool{self.dim}d")
+        self.branch4 = MaxPool(3, stride=1, padding=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # print("x", x.shape)
+        branch1 = self.branch1(x)
+        # print("branch1", branch1.shape)
+        branch2 = self.branch2(x)
+        # print("branch2", branch2.shape)
+        branch3 = self.branch3(x)
+        # print("branch3", branch3.shape)
+        branch4 = self.branch4(x)
+        # print("branch4", branch4.shape)
+        return torch.cat((branch1, branch2, branch3, branch4), 1)
+
+
 class Inception_Q3(nn.Module):
     def __init__(self,
                  *args, **kwargs) -> None:
@@ -352,7 +322,7 @@ class Inception_Q3(nn.Module):
             InceptionBlock(dim=1, channels=1*4*4),
             InceptionBlock(dim=1, channels=1*4*4*4),
             nn.Flatten(),
-            nn.Linear(1*4*4*4*4*16000, 35)
+            nn.Linear(1*4*4*4*4*10000, 35)
         )
 
         self.layers_2d = nn.Sequential(
@@ -372,9 +342,18 @@ class CustomNetwork_Q4(nn.Module):
     def __init__(self,
                  *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        """
-        Write your code here
-        """
+
+        self.layers_1d = nn.Sequential(
+
+        )
+
+        self.layers_2d = nn.Sequential(
+
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers_1d(x) if x.shape[1] == 1 else self.layers_2d(x)
+
 
 def trainer(gpu="F",
             dataloader=None,
@@ -418,6 +397,7 @@ def trainer(gpu="F",
         accuracy
     ))
     """
+
 
 def validator(gpu="F",
               dataloader=None,
