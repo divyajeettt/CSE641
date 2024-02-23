@@ -41,8 +41,8 @@ if __name__ == "__main__":
             lr=LEARNING_RATE
         )
 
-        for dataset in imageDataset:
-        # for dataset in audioDataset:
+        # for dataset in imageDataset:
+        for dataset in audioDataset:
         # for dataset in imageDataset + audioDataset:
             if dataset.datasplit == "train":
                 print(

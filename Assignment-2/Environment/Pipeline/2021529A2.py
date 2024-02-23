@@ -64,20 +64,22 @@ class AudioDataset(Dataset):
         self.dataset = eval(f"audio_{self.datasplit}_set")
         self.length = 10000
         self.sample_rate = 8000
+        self.transform = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate)
 
     def __len__(self) -> int:
         return len(self.dataset)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor]:
-        waveform, sample_rate, label, speaker_id, utterance_number = self.dataset[index]
-        old = waveform.shape
+        waveform, sample_rate, label, _, _ = self.dataset[index]
         resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=self.sample_rate)
         waveform = resampler(waveform)
         if waveform.shape[1] < self.length:
             waveform = nn.functional.pad(waveform, (0, self.length - waveform.shape[1]))
         elif waveform.shape[1] > self.length:
             waveform = waveform[:, :self.length]
-        return waveform, AudioDataset.MAPPING[label]
+        # mel = self.transform(waveform).reshape(51, 128)
+        # return mel, self.MAPPING[label]
+        return waveform, self.MAPPING[label]
 
 
 class ResidualBlock(nn.Module):
@@ -116,27 +118,52 @@ class Resnet_Q1(nn.Module):
                  *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
+        # # mel spectrograms -> 51 channels of 128 length each
+        # self.layers_1d = nn.Sequential(
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51, stride=2),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51, stride=2),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51, stride=2),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51, stride=2),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51, stride=2),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51, stride=2),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51, stride=2),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     ResidualBlock(dim=1, in_channels=51, out_channels=51),
+        #     nn.Flatten(),
+        #     nn.Linear(51, 35)
+        # )
+
+        # raw audio
         self.layers_1d = nn.Sequential(
             ResidualBlock(dim=1, in_channels=1, out_channels=2),                  # Block-01:      1 x 10000 ->    2 x 10000
             ResidualBlock(dim=1, in_channels=2, out_channels=2),                  # Block-02:      2 x 10000 ->    2 x 10000
             ResidualBlock(dim=1, in_channels=2, out_channels=4, stride=3),        # Block-03:      2 x 10000 ->    4 x  3334
             ResidualBlock(dim=1, in_channels=4, out_channels=4),                  # Block-04:      4 x  4445 ->    4 x  3334
-            ResidualBlock(dim=1, in_channels=4, out_channels=8, stride=2),        # Block-05:      4 x  3334 ->    8 x  1667
-            ResidualBlock(dim=1, in_channels=8, out_channels=8),                  # Block-06:      8 x  1667 ->    8 x  1667
+            ResidualBlock(dim=1, in_channels=4, out_channels=4, stride=2),        # Block-05:      4 x  3334 ->    8 x  1667
+            ResidualBlock(dim=1, in_channels=4, out_channels=8),                  # Block-06:      8 x  1667 ->    8 x  1667
             ResidualBlock(dim=1, in_channels=8, out_channels=16, stride=2),       # Block-07:      8 x  1667 ->   16 x   834
             ResidualBlock(dim=1, in_channels=16, out_channels=16),                # Block-08:     16 x   834 ->   16 x  1334
-            ResidualBlock(dim=1, in_channels=16, out_channels=32, stride=3),      # Block-09:     16 x   834 ->   32 x   278
-            ResidualBlock(dim=1, in_channels=32, out_channels=32),                # Block-10:     32 x   278 ->   32 x   278
-            ResidualBlock(dim=1, in_channels=32, out_channels=64, stride=2),      # Block-11:     32 x   278 ->   64 x   139
-            ResidualBlock(dim=1, in_channels=64, out_channels=64, stride=3),      # Block-12:     64 x   139 ->   64 x    47
-            ResidualBlock(dim=1, in_channels=64, out_channels=128, stride=2),     # Block-13:     64 x    47 ->  128 x    38
-            ResidualBlock(dim=1, in_channels=128, out_channels=128, stride=3),    # Block-14:    128 x    24 ->  128 x     8
-            ResidualBlock(dim=1, in_channels=128, out_channels=256, stride=2),    # Block-15:    128 x     8 ->  256 x     4
-            ResidualBlock(dim=1, in_channels=256, out_channels=256, stride=2),    # Block-16:    256 x     4 ->  256 x     2
-            ResidualBlock(dim=1, in_channels=256, out_channels=512, stride=2),    # Block-17:    256 x     2 ->  512 x     1
-            ResidualBlock(dim=1, in_channels=512, out_channels=512, stride=2),    # Block-18:    512 x     1 ->  512 x     1
+            ResidualBlock(dim=1, in_channels=16, out_channels=16, stride=3),      # Block-09:     16 x   834 ->   32 x   278
+            ResidualBlock(dim=1, in_channels=16, out_channels=32),                # Block-10:     32 x   278 ->   32 x   278
+            ResidualBlock(dim=1, in_channels=32, out_channels=32, stride=2),      # Block-11:     32 x   278 ->   64 x   139
+            ResidualBlock(dim=1, in_channels=32, out_channels=64, stride=3),      # Block-12:     64 x   139 ->   64 x    47
+            ResidualBlock(dim=1, in_channels=64, out_channels=64, stride=2),     # Block-13:     64 x    47 ->  128 x    38
+            ResidualBlock(dim=1, in_channels=64, out_channels=128, stride=3),    # Block-14:    128 x    24 ->  128 x     8
+            ResidualBlock(dim=1, in_channels=128, out_channels=128, stride=2),    # Block-15:    128 x     8 ->  256 x     4
+            ResidualBlock(dim=1, in_channels=128, out_channels=256, stride=2),    # Block-16:    256 x     4 ->  256 x     2
+            ResidualBlock(dim=1, in_channels=256, out_channels=256, stride=2),    # Block-17:    256 x     2 ->  512 x     1
+            ResidualBlock(dim=1, in_channels=256, out_channels=256, stride=2),    # Block-18:    512 x     1 ->  512 x     1
             nn.Flatten(),
-            nn.Linear(512, 35)
+            nn.Linear(256, 35)
         )
 
         self.layers_2d = nn.Sequential(
@@ -163,6 +190,7 @@ class Resnet_Q1(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # return self.layers_1d(x) if x.shape[1] == 51 else self.layers_2d(x)
         return self.layers_1d(x) if x.shape[1] == 1 else self.layers_2d(x)
 
 
@@ -346,28 +374,29 @@ def trainer(gpu="F",
             network=None,
             criterion=None,
             optimizer=None):
-    print("in trainer now")
-    device = torch.device("cuda:0") if gpu == "T" else torch.device("cpu")
 
+    device = torch.device("cuda:0") if gpu == "T" else torch.device("cpu")
     network = network.to(device)
+
+    best_loss = float("inf")
+    no_improvement = 0
 
     # Write your code here
     for epoch in range(EPOCH):
         total = total_loss = accuracy = 0
-        for i, (inputs, labels) in enumerate(dataloader):
-            # try:
+        for inputs, labels in dataloader:
+            try:
                 inputs, labels = inputs.to(device), labels.to(device)
                 outputs = network(inputs)
                 total_loss += (loss := criterion(outputs, labels)).item()
                 loss.backward()
                 optimizer.step()
                 optimizer.zero_grad()
-            # except Exception:
-                # continue
-            # else:
+            except Exception:
+                continue
+            else:
                 accuracy += (outputs.argmax(1) == labels).sum().item()
                 total += labels.shape[0]
-                print(i, "of", len(dataloader))
         accuracy /= total
         loss = total_loss / total
         print("Training Epoch: {}, [Loss: {}, Accuracy: {}]".format(
@@ -375,6 +404,22 @@ def trainer(gpu="F",
             loss,
             accuracy
         ))
+
+        checkpoint = {
+            "epoch": epoch,
+            "network": network.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "loss": loss,
+            "accuracy": accuracy
+        }
+        torch.save(checkpoint, "checkpoint.pth")
+
+        if best_loss - loss >= 1e-4:
+            best_loss = loss
+            no_improvement = 0
+        else:
+            if (no_improvement := no_improvement+1) >= 5:
+                break
     """
     Only use this print statement to print your epoch loss, accuracy
     print("Training Epoch: {}, [Loss: {}, Accuracy: {}]".format(
@@ -392,25 +437,59 @@ def validator(gpu="F",
               optimizer=None):
 
     device = torch.device("cuda:0") if gpu == "T" else torch.device("cpu")
-
     network = network.to(device)
+
+    best_loss = float("inf")
+    no_improvement = 0
+
+    try:
+        checkpoint = torch.load("checkpoint.pth")
+    except FileNotFoundError:
+        pass
+    else:
+        network.load_state_dict(checkpoint["network"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        best_loss = checkpoint["loss"]
 
     # Write your code here
     for epoch in range(EPOCH):
-        total = loss = accuracy = 0
+        total = total_loss = accuracy = 0
         for inputs, labels in dataloader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = network(inputs)
-            loss += criterion(outputs, labels).item()
-            accuracy += (outputs.argmax(1) == labels).sum().item()
-            total += labels.shape[0]
+            try:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = network(inputs)
+                total_loss += (loss := criterion(outputs, labels)).item()
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+            except Exception:
+                continue
+            else:
+                accuracy += (outputs.argmax(1) == labels).sum().item()
+                total += labels.shape[0]
         accuracy /= total
-        loss /= total
+        loss = total_loss / total
         print("Validation Epoch: {}, [Loss: {}, Accuracy: {}]".format(
             epoch,
             loss,
             accuracy
         ))
+
+        checkpoint = {
+            "epoch": epoch,
+            "network": network.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "loss": loss,
+            "accuracy": accuracy
+        }
+        torch.save(checkpoint, "checkpoint.pth")
+
+        if best_loss - loss >= 1e-4:
+            best_loss = loss
+            no_improvement = 0
+        else:
+            if (no_improvement := no_improvement+1) >= 5:
+                break
     """
     Only use this print statement to print your epoch loss, accuracy
     print("Validation Epoch: {}, [Loss: {}, Accuracy: {}]".format(
@@ -428,6 +507,15 @@ def evaluator(gpu="F",
               optimizer=None):
 
     device = torch.device("cuda:0") if gpu == "T" else torch.device("cpu")
+    network = network.to(device)
+    criterion = nn.CrossEntropyLoss()
+
+    try:
+        checkpoint = torch.load("checkpoint.pth")
+    except FileNotFoundError:
+        pass
+    else:
+        network.load_state_dict(checkpoint["network"])
 
     # Write your code here
     total = loss = accuracy = 0
