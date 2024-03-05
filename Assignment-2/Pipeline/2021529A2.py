@@ -5,12 +5,8 @@ import torch.nn as nn
 from Pipeline import *
 from torch.utils.data import Dataset, DataLoader, random_split
 
-"""
-Write Code for Downloading Image and Audio Dataset Here
-"""
-# Image Downloader
 image_dataset_downloader = torchvision.datasets.CIFAR10(
-    root="data", train=True, download=True,                        # change download to True
+    root="data", train=True, download=True,
     transform=torchvision.transforms.ToTensor()
 )
 
@@ -18,9 +14,8 @@ image_train_set, image_test_set, image_val_set = random_split(
     image_dataset_downloader, [0.7, 0.2, 0.1]
 )
 
-# Audio Downloader
 audio_dataset_downloader = torchaudio.datasets.SPEECHCOMMANDS(
-    root="data", download=True, url="speech_commands_v0.02",        # change download to True
+    root="data", download=True, url="speech_commands_v0.02",
 )
 
 audio_train_set, audio_test_set, audio_val_set = random_split(
@@ -29,7 +24,11 @@ audio_train_set, audio_test_set, audio_val_set = random_split(
 
 
 class ImageDataset(Dataset):
-    def __init__(self, split:str="train") -> None:
+    """
+    Represents the CIFAR-10 image dataset.
+    """
+
+    def __init__(self, split: str = "train") -> None:
         super().__init__()
         if split not in ["train", "test", "val"]:
             raise Exception("Data split must be in [train, test, val]")
@@ -38,18 +37,25 @@ class ImageDataset(Dataset):
         self.dataset = eval(f"image_{self.datasplit}_set")
 
     def __len__(self) -> int:
+        """
+        Returns the number of entries in the dataset.
+        """
         return len(self.dataset)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor]:
+        """
+        Returns the data and label for the given index.
+        """
         return self.dataset[index]
 
 
 class AudioDataset(Dataset):
     MAPPING: dict[str, int] = {
-        "backward": 0, "bed": 1, "bird": 2, "cat": 3, "dog": 4, "down": 5, "eight": 6, "five": 7,
-        "follow": 8, "forward": 9, "four": 10, "go": 11, "happy": 12, "house": 13, "learn": 14,
-        "left": 15, "marvin": 16, "nine": 17, "no": 18, "off": 19, "on": 20, "one": 21, "right": 22,
-        "seven": 23, "sheila": 24, "six": 25, "stop": 26, "three": 27, "tree": 28, "two": 29,
+        "backward": 0, "bed": 1, "bird": 2, "cat": 3, "dog": 4, "down": 5,
+        "eight": 6, "five": 7, "follow": 8, "forward": 9, "four": 10, "go": 11,
+        "happy": 12, "house": 13, "learn": 14, "left": 15, "marvin": 16,  "nine": 17,
+        "no": 18, "off": 19, "on": 20, "one": 21, "right": 22, "seven": 23,
+        "sheila": 24, "six": 25, "stop": 26, "three": 27, "tree": 28, "two": 29,
         "up": 30, "visual": 31, "wow": 32, "yes": 33, "zero": 34
     }
 
@@ -62,12 +68,20 @@ class AudioDataset(Dataset):
 
         self.datasplit = split
         self.dataset = eval(f"audio_{self.datasplit}_set")
-        self.transform = torchaudio.transforms.MFCC(n_mfcc=20, log_mels=True, melkwargs=dict(n_fft=400, hop_length=160, n_mels=40))
+        self.transform = torchaudio.transforms.MFCC(
+            n_mfcc=20, log_mels=True, melkwargs=dict(n_fft=400, hop_length=160, n_mels=40)
+        )
 
     def __len__(self) -> int:
+        """
+        Returns the number of entries in the dataset.
+        """
         return len(self.dataset)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor]:
+        """
+        Returns the data and label for the given index.
+        """
         waveform, sample_rate, label, _, _ = self.dataset[index]
         if waveform.shape[1] < sample_rate:
             waveform = nn.functional.pad(waveform, (0, sample_rate-waveform.shape[1]))
@@ -76,6 +90,21 @@ class AudioDataset(Dataset):
 
 
 class ResidualBlock(nn.Module):
+    """
+    Represents a Residual Block for the ResNet Architecture. The block is built with
+    the given specifications:
+        - Convolutional Layer with kernel size 3x3
+        - Batch Normalization Layer
+        - ReLU Activation Layer
+        - Convolutional Layer with kernel size 3x3
+        - Batch Normalization Layer
+        - Residual Connection
+    :attrs:
+        - dim: The dimension of the input data (must be 1 or 2 to create 1d or 2d layers)
+        - layers: The layers of the Residual Block
+        - residual_conv: The convolutional layer for the residual connection
+    """
+
     def __init__(self, dim: int, in_channels: int, out_channels: int, stride: int = 1) -> None:
         super(ResidualBlock, self).__init__()
 
@@ -98,6 +127,9 @@ class ResidualBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the Residual Block.
+        """
         residual = x
         out = self.layers(x)
         if out.shape != residual.shape:
@@ -106,29 +138,37 @@ class ResidualBlock(nn.Module):
 
 
 class Resnet_Q1(nn.Module):
-    def __init__(self,
-                 *args, **kwargs) -> None:
+    """
+    Represents the ResNet Architecture for the given dataset. The architecture is
+    built with 18 stacked Residual Blocks. The network is designed to work with both
+    1D and 2D data, based on the shape of the input data.
+    :attrs:
+        - layers_1d: The layers for the 1D data
+        - layers_2d: The layers for the 2D data
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.layers_1d = nn.Sequential(
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20),
-            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-01:   20 x 101 ->   20 x 101
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-02:   20 x 101 ->   20 x 101
+            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),      # Block-03:   20 x 101 ->   20 x  51
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-04:   20 x  51 ->   20 x  51
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-05:   20 x  51 ->   20 x  51
+            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),      # Block-06:   20 x  51 ->   20 x  26
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-07:   20 x  26 ->   20 x  26
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-08:   20 x  26 ->   20 x  26
+            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),      # Block-09:   20 x  26 ->   20 x  13
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-10:   20 x  13 ->   20 x  13
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-11:   20 x  13 ->   20 x  13
+            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),      # Block-12:   20 x  13 ->   20 x   7
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-13:   20 x   7 ->   20 x   7
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-14:   20 x   7 ->   20 x   7
+            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),      # Block-15:   20 x   7 ->   20 x   4
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-16:   20 x   4 ->   20 x   4
+            ResidualBlock(dim=1, in_channels=20, out_channels=20),                # Block-17:   20 x   4 ->   20 x   4
+            ResidualBlock(dim=1, in_channels=20, out_channels=20, stride=2),      # Block-18:   20 x   4 ->   20 x   2
             nn.Flatten(),
             nn.Linear(40, 35)
         )
@@ -157,11 +197,27 @@ class Resnet_Q1(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the ResNet Architecture.
+        """
         return self.layers_1d(x) if x.shape[1] == 20 else self.layers_2d(x)
 
 
 class VGGBlock(nn.Module):
-    def __init__(self, dim: int, num_convs: int, in_channels: int, out_channels: int, kernel_size: int, padding: int = 0) -> None:
+    """
+    Represents a VGG Block for the VGG Architecture. The block is built with the given
+    specifications:
+        - 2 or 3 Convolutional Layer with a given kernel size
+        - Max Pooling Layer with a given kernel size
+    :attrs:
+        - dim: The dimension of the input data (must be 1 or 2 to create 1d or 2d layers)
+        - layers: The layers of the VGG Block
+    """
+
+    def __init__(
+            self, dim: int, num_convs: int, in_channels: int, out_channels: int,
+            kernel_size: int, padding: int = 0
+        ) -> None:
         super(VGGBlock, self).__init__()
 
         assert dim == 1 or dim == 2, "dim must be 1 or 2"
@@ -176,12 +232,23 @@ class VGGBlock(nn.Module):
         self.layers = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the VGG Block.
+        """
         return self.layers(x)
 
 
 class VGG_Q2(nn.Module):
-    def __init__(self,
-                 *args, **kwargs) -> None:
+    """
+    Represents the VGG Architecture for the given dataset. The architecture is built with
+    5 stacked VGG Blocks followed by 3 linear layers for classification. The network is
+    designed to work with both 1D and 2D data, based on the shape of the input data.
+    :attrs:
+        - layers_1d: The layers for the 1D data
+        - layers_2d: The layers for the 2D data
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.layers_1d = nn.Sequential(
@@ -213,14 +280,28 @@ class VGG_Q2(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.shape[1] == 20:
-            return self.layers_1d(x)
-        else:
-            return self.layers_2d(x.repeat(1, 12, 1, 1))
+        """
+        Forward pass for the VGG Architecture.
+        """
+        return self.layers_1d(x) if x.shape[1] == 20 else self.layers_2d(x.repeat(1, 12, 1, 1))
 
 
 class CNA(nn.Module):
-    def __init__(self, dim: int, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, padding: int = 0) -> None:
+    """
+    Represents a block of a Conv Layer followed by a Batch Norm and ReLU Activation Layer.
+    The layer is built with the given specifications:
+        - Convolutional Layer with a given kernel size
+        - Batch Normalization Layer
+        - ReLU Activation Layer
+    :attrs:
+        - dim: The dimension of the input data (must be 1 or 2 to create 1d or 2d layers)
+        - layers: The layers of the CNA Layer
+    """
+
+    def __init__(
+            self, dim: int, in_channels: int, out_channels: int, kernel_size: int,
+            stride: int = 1, padding: int = 0
+        ) -> None:
         super(CNA, self).__init__()
 
         assert dim == 1 or dim == 2, "dim must be 1 or 2"
@@ -235,10 +316,30 @@ class CNA(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the CNA Layer.
+        """
         return self.layers(x)
 
 
 class InceptionBlock(nn.Module):
+    """
+    Represents an Inception Block for the Inception Architecture. The block is built with
+    the given specifications:
+        - Branch 1: 1x1 Convolutional Layer
+        - Branch 2: 1x1 Convolutional Layer followed by 3x3 Convolutional Layer
+        - Branch 3: 1x1 Convolutional Layer followed by 5x5 Convolutional Layer
+        - Branch 4: Max Pooling Layer
+    The output of the network is a concatenation of the outputs of the branches, with the
+    number of output channels for each branch specified.
+    :attrs:
+        - dim: The dimension of the input data (must be 1 or 2 to create 1d or 2d layers)
+        - branch1: The layers for Branch 1
+        - branch2: The layers for Branch 2
+        - branch3: The layers for Branch 3
+        - branch4: The layers for Branch 4
+    """
+
     def __init__(self, dim: int, in_channels: int, out_1x1: int, out_5x5a: int, out_5x5b: int) -> None:
         super(InceptionBlock, self).__init__()
 
@@ -257,6 +358,9 @@ class InceptionBlock(nn.Module):
         self.branch4 = MaxPool(3, stride=1, padding=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the Inception Block.
+        """
         branch1 = self.branch1(x)
         branch2 = self.branch2(x)
         branch3 = self.branch3(x)
@@ -265,8 +369,16 @@ class InceptionBlock(nn.Module):
 
 
 class Inception_Q3(nn.Module):
-    def __init__(self,
-                 *args, **kwargs) -> None:
+    """
+    Represents the Inception Architecture for the given dataset. The architecture is built
+    with 4 stacked Inception Blocks followed by a classification layer. The network is
+    designed to work with both 1D and 2D data, based on the shape of the input data.
+    :attrs:
+        - layers_1d: The layers for the 1D data
+        - layers_2d: The layers for the 2D data
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.layers_1d = nn.Sequential(
@@ -288,12 +400,23 @@ class Inception_Q3(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the Inception Architecture.
+        """
         return self.layers_1d(x) if x.shape[1] == 20 else self.layers_2d(x)
 
 
 class CustomNetwork_Q4(nn.Module):
-    def __init__(self,
-                 *args, **kwargs) -> None:
+    """
+    Represents a Custom Architecture for the given dataset. The architecture is built with
+    alternating Residual and Inception Blocks followed by a classification layer. The network
+    is designed to work with both 1D and 2D data, based on the shape of the input data.
+    :attrs:
+        - layers_1d: The layers for the 1D data
+        - layers_2d: The layers for the 2D data
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.layers_1d = nn.Sequential(
@@ -327,37 +450,39 @@ class CustomNetwork_Q4(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the Custom Architecture.
+        """
         return self.layers_1d(x) if x.shape[1] == 20 else self.layers_2d(x)
 
 
-def trainer(gpu="F",
-            dataloader=None,
-            network=None,
-            criterion=None,
-            optimizer=None):
+def trainer(gpu="F", dataloader=None, network=None, criterion=None, optimizer=None) -> None:
+    """
+    Trains the given network using the given criterion and optimizer on the given dataloader.
+    :params:
+        - gpu: The flag to enable GPU training (F for CPU, T for GPU)
+        - dataloader: The dataloader for the training dataset
+        - network: The network to be trained
+        - criterion: The loss function to be used
+        - optimizer: The optimizer to be used
+    """
 
     device = torch.device("cuda:0") if gpu == "T" else torch.device("cpu")
     network = network.to(device)
-
     best_loss = float("inf")
     no_improvement = 0
 
-    # Write your code here
     for epoch in range(EPOCH):
         total = total_loss = accuracy = 0
         for inputs, labels in dataloader:
-            try:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = network(inputs)
-                total_loss += (loss := criterion(outputs, labels)).item()
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
-            except Exception:
-                continue
-            else:
-                accuracy += (outputs.argmax(1) == labels).sum().item()
-                total += labels.shape[0]
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = network(inputs)
+            total_loss += (loss := criterion(outputs, labels)).item()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            accuracy += (outputs.argmax(1) == labels).sum().item()
+            total += labels.shape[0]
         accuracy /= total
         loss = total_loss / total
         print("Training Epoch: {}, [Loss: {}, Accuracy: {}]".format(
@@ -379,27 +504,25 @@ def trainer(gpu="F",
             best_loss = loss
             no_improvement = 0
         else:
-            if (no_improvement := no_improvement+1) >= 5:
-                break
-    """
-    Only use this print statement to print your epoch loss, accuracy
-    print("Training Epoch: {}, [Loss: {}, Accuracy: {}]".format(
-        epoch,
-        loss,
-        accuracy
-    ))
-    """
+            if (no_improvement := no_improvement+1) >= 5: break
 
 
-def validator(gpu="F",
-              dataloader=None,
-              network=None,
-              criterion=None,
-              optimizer=None):
+def validator(gpu="F", dataloader=None, network=None, criterion=None, optimizer=None) -> None:
+    """
+    Validates and fine-tunes the given network using the given criterion and optimizer on the
+    given dataloader. The network is fine-tuned until the validation loss stops improving for
+    5 consecutive epochs. If the network is not specified, the function loads the current
+    network from the checkpoint file.
+    :params:
+        - gpu: The flag to enable GPU training (F for CPU, T for GPU)
+        - dataloader: The dataloader for the validation dataset
+        - network: The network to be fine-tuned
+        - criterion: The loss function to be used
+        - optimizer: The optimizer to be used
+    """
 
     device = torch.device("cuda:0") if gpu == "T" else torch.device("cpu")
     network = network.to(device)
-
     best_loss = float("inf")
     no_improvement = 0
 
@@ -412,22 +535,17 @@ def validator(gpu="F",
         optimizer.load_state_dict(checkpoint["optimizer"])
         best_loss = checkpoint["loss"]
 
-    # Write your code here
     for epoch in range(EPOCH):
         total = total_loss = accuracy = 0
         for inputs, labels in dataloader:
-            try:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = network(inputs)
-                total_loss += (loss := criterion(outputs, labels)).item()
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
-            except Exception:
-                continue
-            else:
-                accuracy += (outputs.argmax(1) == labels).sum().item()
-                total += labels.shape[0]
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = network(inputs)
+            total_loss += (loss := criterion(outputs, labels)).item()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            accuracy += (outputs.argmax(1) == labels).sum().item()
+            total += labels.shape[0]
         accuracy /= total
         loss = total_loss / total
         print("Validation Epoch: {}, [Loss: {}, Accuracy: {}]".format(
@@ -449,23 +567,20 @@ def validator(gpu="F",
             best_loss = loss
             no_improvement = 0
         else:
-            if (no_improvement := no_improvement+1) >= 5:
-                break
-    """
-    Only use this print statement to print your epoch loss, accuracy
-    print("Validation Epoch: {}, [Loss: {}, Accuracy: {}]".format(
-        epoch,
-        loss,
-        accuracy
-    ))
-    """
+            if (no_improvement := no_improvement+1) >= 5: break
 
 
-def evaluator(gpu="F",
-              dataloader=None,
-              network=None,
-              criterion=None,
-              optimizer=None):
+def evaluator(gpu="F", dataloader=None, network=None, criterion=None, optimizer=None) -> None:
+    """
+    Evaluates the given network using the given criterion on the given dataloader. If the
+    network is not specified, the function loads the current network from the checkpoint file.
+    :params:
+        - gpu: The flag to enable GPU training (F for CPU, T for GPU)
+        - dataloader: The dataloader for the evaluation dataset
+        - network: The network to be evaluated
+        - criterion: The loss function to be used
+        - optimizer: The optimizer to be used
+    """
 
     device = torch.device("cuda:0") if gpu == "T" else torch.device("cpu")
     network = network.to(device)
@@ -478,7 +593,6 @@ def evaluator(gpu="F",
     else:
         network.load_state_dict(checkpoint["network"])
 
-    # Write your code here
     total = loss = accuracy = 0
     for inputs, labels in dataloader:
         inputs, labels = inputs.to(device), labels.to(device)
@@ -492,11 +606,3 @@ def evaluator(gpu="F",
         loss,
         accuracy
     ))
-    """
-    Only use this print statement to print your loss, accuracy
-    print("[Loss: {}, Accuracy: {}]".format(
-        loss,
-        accuracy
-    ))
-    """
-

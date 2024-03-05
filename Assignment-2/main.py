@@ -1,17 +1,12 @@
 # Replace changerollno with your rollnumber as mentioned in Assignment Guidelines
 import argparse
 from Pipeline import *
-
-# from Pipeline.2021529A2 import *
-import importlib
-module = importlib.import_module("Pipeline.2021529A2")
-globals().update(vars(module))
+from Pipeline.2021529A2 import *
 
 P = argparse.ArgumentParser()
 P.add_argument("gpu", type=str)
 A = P.parse_args()
 
-__name__ = "__main__"
 
 if __name__ == "__main__":
     imageDataset = [
@@ -20,7 +15,6 @@ if __name__ == "__main__":
         ImageDataset(split="test")
     ]
 
-
     audioDataset = [
         AudioDataset(split="train"),
         AudioDataset(split="val"),
@@ -28,9 +22,9 @@ if __name__ == "__main__":
     ]
 
     Architectures = [
-        # Resnet_Q1(),
-        # VGG_Q2(),
-        # Inception_Q3(),
+        Resnet_Q1(),
+        VGG_Q2(),
+        Inception_Q3(),
         CustomNetwork_Q4()
     ]
 
@@ -41,9 +35,7 @@ if __name__ == "__main__":
             lr=LEARNING_RATE
         )
 
-        for dataset in imageDataset:
-        # for dataset in audioDataset:
-        # for dataset in imageDataset + audioDataset:
+        for dataset in imageDataset + audioDataset:
             if dataset.datasplit == "train":
                 print(
                     "Training {} Architecture on {} split of {}".format(
@@ -60,7 +52,6 @@ if __name__ == "__main__":
                     num_workers=2,
                     drop_last=True
                 )
-
                 trainer(
                     gpu=A.gpu,
                     dataloader=train_dataloader,
@@ -85,7 +76,6 @@ if __name__ == "__main__":
                     num_workers=2,
                     drop_last=True
                 )
-
                 validator(
                     gpu=A.gpu,
                     dataloader=val_dataloader,
