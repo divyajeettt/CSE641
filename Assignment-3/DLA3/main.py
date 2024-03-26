@@ -3,11 +3,11 @@ import torch
 import random
 import argparse
 from EncDec import *
-# from DLA3.EncDec.changerollno import *
 
+# from DLA3.EncDec.2021529A3 import *
 import importlib
-encdec = importlib.import_module("DLA3.EncDec.2021529A3")
-globals().update(vars(encdec))
+module = importlib.import_module("DLA3.EncDec.2021529A3")
+globals().update(vars(module))
 
 from torch.utils.data import DataLoader
 
@@ -35,13 +35,13 @@ if __name__ == "__main__":
 
     print("Training Encoder: {}, Decoder: {} on Modified MNIST dataset in AE training paradigm".format(
         E.__class__.__name__,
-        D.__class__.__name__,
+        D.__class__.__name__
     ))
     AETrainer(Data, E, D, L[0], O, A.gpu)
 
     print("Training Encoder: {}, Decoder: {} on Modified MNIST dataset in VAE training paradigm".format(
         E.__class__.__name__,
-        D.__class__.__name__,
+        D.__class__.__name__
     ))
     VAETrainer(Data, E, D, L[1], O, A.gpu)
 
