@@ -120,7 +120,9 @@ class Encoder(torch.nn.Module):
     Blocks. The encoded logits/embeddings are of shape [batch_size, 128, 2, 2].
     :attrs:
         - layers: The layers of the Encoder
-    # TODO: Implement Variational Encoder in the same class
+        - mu: The linear layer for the mean of the latent space
+        - logvar: The linear layer for the log variance of the latent space
+        - flatten: The flattening layer
     """
 
     def __init__(self):
@@ -132,12 +134,17 @@ class Encoder(torch.nn.Module):
             EncoderBlock(in_channels=32, out_channels=64, stride=3),
             EncoderBlock(in_channels=64, out_channels=128, stride=1)
         )
+        self.mu = torch.nn.Linear(128*2*2, 128)
+        self.logvar = torch.nn.Linear(128*2*2, 128)
+        self.flatten = torch.nn.Flatten()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor]:
         """
-        Forward pass for the Encoder.
+        Forward pass for the Encoder. Returns the embeddings, mean, and log variance.
         """
-        return self.layers(x)
+        z = self.layers(x)
+        flat = self.flatten(z)
+        return z, self.mu(flat), self.logvar(flat)
 
 
 class DecoderBlock(torch.nn.Module):
@@ -186,7 +193,8 @@ class Decoder(torch.nn.Module):
     Blocks (to approximately undo the encoding). The output images are of shape [batch_size, 1, 28, 28].
     :attrs:
         - layers: The layers of the Decoder
-    # TODO: Implement Variational Decoder in the same class
+        - fc: The linear layer for transforming from the latent space to the initial shape
+        - unflatten: The unflattening layer
     """
 
     def __init__(self):
@@ -198,11 +206,14 @@ class Decoder(torch.nn.Module):
             DecoderBlock(in_channels=16, out_channels=8, stride=3),
             DecoderBlock(in_channels=8, out_channels=1, stride=1)
         )
+        self.fc = torch.nn.Linear(128, 128*2*2)
+        self.unflatten = torch.nn.Unflatten(dim=1, unflattened_size=(128, 2, 2))
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """
         Forward pass for the Decoder.
         """
+        z = self.unflatten(self.fc(z)) if z.dim() == 2 else z
         return self.layers(z)
 
 
@@ -260,22 +271,26 @@ def ParameterSelector(encoder: Encoder, decoder: Decoder):
 
 class AETrainer:
     """
-    Trainer for the AutoEncoder. The trainer trains the Encoder and Decoder on the given
-    DataLoader using the given Loss Function and Optimizer.
-
-    The trainer prints for every 10th minibatch the mean loss and similarity as follows:
-    print(">>>>> Epoch:{}, Minibatch:{}, Loss:{}, Similarity:{}".format(epoch, minibatch, loss, similarity))
-
-    The trainer also prints for every epoch the mean loss and similarity as follows:
-    print("----- Epoch:{}, Loss:{}, Similarity:{}".format(epoch, loss, similarity))
-
-    After every 5 epochs the trainer saves a 3D TSNE plot of logits of the train set as AE_epoch_{}.png.
+    Trainer for the AutoEncoder. The trainer trains the Encoder and Decoder on
+    the given DataLoader using the given Loss Function and Optimizer. The trainer
+    prints the mean loss and similarity for every 10th minibatch and for every epoch.
+    After every 5 epochs the trainer saves a 3D TSNE plot of logits of the train
+    set as AE_epoch_{}.png.
+    :attrs:
+        - paradigm: The paradigm of the trainer (AE)
+        - dataloader: The DataLoader for the training data
+        - encoder: The Encoder for the AutoEncoder
+        - decoder: The Decoder for the AutoEncoder
+        - loss_fn: The Loss Function for the AutoEncoder
+        - optimizer: The Optimizer for the AutoEncoder
+        - device: The device to train the AutoEncoder on
     """
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
         loss_fn: AELossFn|VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str
     ):
+        self.paradigm = "AE"
         self.dataloader = dataloader
         self.encoder = encoder
         self.decoder = decoder
@@ -297,8 +312,7 @@ class AETrainer:
 
             for minibatch, (noisy, target, _) in enumerate(self.dataloader):
                 noisy, target = noisy.to(self.device), target.to(self.device)
-                denoised = self.decoder(self.encoder(noisy))
-                loss = self.loss_fn(denoised, target)
+                denoised, loss = self.train_batch(noisy, target)
                 total_loss += loss.item()
                 loss_count += 1
                 loss.backward()
@@ -306,7 +320,7 @@ class AETrainer:
                 self.optimizer.zero_grad()
 
                 if minibatch % 10 == 0:
-                    similarity = self.similarity(target, denoised)
+                    similarity = abs(self.similarity(target, denoised))
                     total_similarity += similarity
                     similarity_count += 1
                     print(f">>>>> Epoch:{epoch}, Minibatch:{minibatch}, Loss:{loss.item()}, Similarity:{similarity}")
@@ -315,12 +329,21 @@ class AETrainer:
             loss = total_loss / loss_count
             print(f"----- Epoch:{epoch}, Loss:{loss}, Similarity:{similarity}")
 
-            if epoch % 5 == 0:
-                self.tsne_plot(epoch)
+            if epoch % 10 == 9: self.tsne_plot(epoch+1)
+
+    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor]:
+        """
+        Processes a single training batch of noisy and target images and
+        returns the denoised images and the loss tensor.
+        """
+        logits, _, _ = self.encoder(noisy)
+        denoised = self.decoder(logits)
+        return denoised, self.loss_fn(denoised, target)
 
     def similarity(self, target: torch.Tensor, output: torch.Tensor) -> float:
         """
-        Computes the Structural Similarity Index between the target and output images.
+        Computes the Structural Similarity Index between the target and output
+        images.
         """
         scores = []
         for i in range(target.shape[0]):
@@ -333,46 +356,55 @@ class AETrainer:
         """
         Saves a 3D TSNE plot of the logits of the training data.
         """
+        self.encoder.eval()
         logits, labels = [], []
-        for noisy, _, label in self.dataloader:
-            noisy = noisy.to(self.device)
-            logits.append(self.encoder(noisy).detach().cpu().view(-1, 128*2*2))
-            labels.append(label.flatten())
-        logits = torch.cat(logits, dim=0).view(-1, 128*2*2)
-        labels = torch.cat(labels, dim=0).flatten()
+        with torch.no_grad():
+            for noisy, _, label in self.dataloader:
+                noisy = noisy.to(self.device)
+                embeddings, _, _ = self.encoder(noisy)
+                logits.append(embeddings.detach().cpu().view(-1, 128*2*2))
+                labels.append(label.flatten())
+            logits = torch.cat(logits, dim=0).view(-1, 128*2*2)
+            labels = torch.cat(labels, dim=0).flatten()
 
         logits = TSNE(n_components=3).fit_transform(logits, labels)
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
         ax.scatter(logits[:, 0], logits[:, 1], logits[:, 2], c=labels, alpha=0.75)
-        plt.savefig(f"AE_epoch_{epoch}.png")
+        plt.savefig(f"{self.paradigm}_epoch_{epoch}.png")
+        plt.close()
+        self.encoder.train()
 
 
-class VAETrainer:
+class VAETrainer(AETrainer):
     """
-    Trainer for the Variational AutoEncoder. The trainer trains the Encoder and Decoder on the given
-    DataLoader using the given Loss Function and Optimizer.
-
-    The trainer prints for every 10th minibatch the mean loss and similarity as follows:
-    print(">>>>> Epoch:{}, Minibatch:{}, Loss:{}, Similarity:{}".format(epoch, minibatch, loss, similarity))
-
-    The trainer also prints for every epoch the mean loss and similarity as follows:
-    print("----- Epoch:{}, Loss:{}, Similarity:{}".format(epoch, loss, similarity))
-
-    After every 5 epochs the trainer saves a 3D TSNE plot of logits of the train set as VAE_epoch_{}.png.
+    Trainer for the Variational version of the AutoEncoder. The TSNE plots are
+    saved as VAE_epoch_{}.png.
     """
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: AELossFn|VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: bool
+        loss_fn: VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: bool
     ):
-        pass
+        super(VAETrainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu)
+        self.paradigm = "VAE"
 
-    def train(self) -> None:
+    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
-        Trains the Variational AutoEncoder.
+        Reparameterizes the latent space to sample from the normal distribution.
         """
-        pass
+        std = logvar.mul(0.5).exp_()
+        eps = torch.randn_like(std)
+        return mu + eps*std
+
+    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor]:
+        """
+        Processes a single training batch of noisy and target images and
+        returns the denoised images and the loss tensor.
+        """
+        _, mu, logvar = self.encoder(noisy)
+        denoised = self.decoder(self.reparameterize(mu, logvar))
+        return denoised, self.loss_fn(denoised, target, mu, logvar)
 
 
 class CVAE_Trainer:
