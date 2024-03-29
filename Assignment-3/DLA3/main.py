@@ -6,7 +6,7 @@ from EncDec import *
 
 # from DLA3.EncDec.2021529A3 import *
 import importlib
-module = importlib.import_module("DLA3.EncDec.2021529A3")
+module = importlib.import_module("EncDec.2021529A3")
 globals().update(vars(module))
 
 from torch.utils.data import DataLoader
@@ -17,7 +17,7 @@ P.add_argument("gpu", type=str)
 P.add_argument("bonus", type=str)
 A = P.parse_args()
 
-
+__name__ = "__main__"
 if __name__ == "__main__":
     Data = DataLoader(
         dataset=AlteredMNIST(),
