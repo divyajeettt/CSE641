@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from skimage.metrics import structural_similarity
 
-
+'''
 class AlteredMNIST:
     """
     Represents the given modified MNIST dataset. Due to the unavailability of the
@@ -61,10 +61,9 @@ class AlteredMNIST:
         at the given index.
         """
         aug_path = self.augmented[index]
-        label = int(aug_path[-5])
         aug = self.get_pil_image(aug_path)
         clean = self.get_pil_image(self.mapping[aug_path])
-        return self.transform(aug), self.transform(clean), torch.tensor(label)
+        return self.transform(aug), self.transform(clean), torch.tensor(int(aug_path[-5]))
 
     def get_pil_image(self, path: str) -> "PIL.Image.Image":
         """
@@ -73,6 +72,86 @@ class AlteredMNIST:
         return torchvision.transforms.functional.to_pil_image(
             torchvision.io.read_image(os.path.join(self.root, path))
         )
+'''
+
+from sklearn.mixture import GaussianMixture
+import tqdm
+
+
+class AlteredMNIST:
+    """
+    Represents the given modified MNIST dataset. Due to the unavailability of the
+    original mapping for augmentation, we map four augmented images per label to
+    one clean image per label. The images are named "Data/X/X_I_L.png":
+        - X: {aug=[augmented], clean=[clean]}
+        - I: {Index range(0, 60000)}
+        - L: {Labels range(10)}
+    :attrs:
+        - root: The root directory
+        - augmented: The list of paths to augmented images
+        - clean: Labelwise mapping of clean images
+        - mapping: Mapping of augmented images to clean images
+        - transform: The preprocessing transformation pipeline
+    """
+    def __init__(self):
+        self.root = os.getcwd()
+        self.augmented = [os.path.join(r"Data/aug", image) for image in os.listdir(os.path.join(self.root, r"Data/aug"))]
+
+        self.clean = {str(label): [] for label in range(10)}
+        for image in os.listdir(os.path.join(self.root, r"Data/clean")):
+            label = image[-5]
+            self.clean[label].append(os.path.join(r"Data/clean", image))
+
+        self.transform = torchvision.transforms.Compose([
+            torchvision.transforms.Grayscale(num_output_channels=1),
+            torchvision.transforms.Resize((28, 28)),
+            torchvision.transforms.ToTensor()
+        ])
+
+        self._create_gmms()
+        self._create_mapping()
+
+    def __len__(self) -> int:
+        return len(self.augmented)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor]:
+        aug_path = self.augmented[index]
+        aug = self._get_pil_image(aug_path)
+        clean = self._get_pil_image(self.mapping[aug_path])
+        return self.transform(aug), self.transform(clean), torch.tensor(int(aug_path[-5]))
+
+    def _get_pil_image(self, path: str) -> "PIL.Image.Image":
+        return torchvision.transforms.functional.to_pil_image(
+            torchvision.io.read_image(os.path.join(self.root, path))
+        )
+
+    def _get_feature_vector(self, path: str) -> torch.Tensor:
+        return self.transform(self._get_pil_image(path)).flatten()
+
+    def _create_gmms(self):
+        self.GMMS = {}
+        for label in range(10):
+            print("Creating GMM", label)
+            self.GMMS[str(label)] = GaussianMixture(n_components=10)
+            clean_images = []
+            for clean_path in self.clean[str(label)]:
+                clean_images.append(self._get_feature_vector(clean_path))
+
+            clean_images = torch.stack(clean_images).view(-1, 28*28).numpy()
+            self.GMMS[str(label)].fit(clean_images)
+
+    def _create_mapping(self):
+        print("Creating Mapping")
+        self.mapping = {}
+        for aug_path in tqdm.tqdm(self.augmented):
+            self.mapping[aug_path] = self._get_closest_image(aug_path)
+
+    def _get_closest_image(self, aug_path: str) -> str:
+        aug = self._get_feature_vector(aug_path)
+        label = aug_path[-5]
+        likelihoods = self.GMMS[label].score_samples(aug.reshape(1, -1))
+        closest = torch.argmax(torch.tensor(likelihoods)).item()
+        return self.clean[label][closest]
 
 
 class EncoderBlock(torch.nn.Module):
@@ -89,6 +168,7 @@ class EncoderBlock(torch.nn.Module):
         - layers: The layers of the Encoder Block
         - residual_conv: The convolutional layer for the residual connection
     """
+
     def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
         super(EncoderBlock, self).__init__()
         self.layers = torch.nn.Sequential(
@@ -114,6 +194,41 @@ class EncoderBlock(torch.nn.Module):
         return torch.nn.functional.relu(out + residual)
 
 
+'''
+class EncoderBlockDownsample(torch.nn.Module):
+    """
+    Represents a Residual Encoder Block for the AutoEncoder. The block is built with
+    the ResNet style specifications:
+        - Convolutional Layer with kernel size 3x3
+        - Batch Normalization Layer
+        - ReLU Activation Layer
+        - Convolutional Layer with kernel size 3x3
+        - Batch Normalization Layer
+        - Residual Connection
+    :attrs:
+        - layers: The layers of the Encoder Block
+        - residual_conv: The convolutional layer for the residual connection
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
+        super(EncoderBlock, self).__init__()
+        self.layers = torch.nn.Sequential(
+            torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
+            torch.nn.BatchNorm2d(out_channels),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            torch.nn.BatchNorm2d(out_channels)
+        )
+        self.downsample = torch.nn.MaxPool2d(kernel_size=3, stride=2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.layers(x)
+        residual = [self.downsample(x)] * (out.shape[1] // x.shape[1])
+        residual = torch.concatenate(residual, dim=1)
+        return torch.nn.functional.relu(out + residual[:, :, :out.shape[2], :out.shape[3]])
+'''
+
+
 class Encoder(torch.nn.Module):
     """
     Represents the Encoder for the AutoEncoder. The Encoder consists of 5 Encoder
@@ -128,23 +243,20 @@ class Encoder(torch.nn.Module):
     def __init__(self):
         super(Encoder, self).__init__()
         self.layers = torch.nn.Sequential(
-            EncoderBlock(in_channels=1, out_channels=8, stride=1),
+            EncoderBlock(in_channels=1, out_channels=4, stride=1),
+            EncoderBlock(in_channels=4, out_channels=8, stride=3),
             EncoderBlock(in_channels=8, out_channels=16, stride=3),
-            EncoderBlock(in_channels=16, out_channels=32, stride=3),
-            EncoderBlock(in_channels=32, out_channels=64, stride=3),
-            EncoderBlock(in_channels=64, out_channels=128, stride=1)
+            EncoderBlock(in_channels=16, out_channels=32, stride=3)
         )
-        self.mu = torch.nn.Linear(128*2*2, 128)
-        self.logvar = torch.nn.Linear(128*2*2, 128)
+        self.mu = torch.nn.Linear(32*2*2, 32)
+        self.logvar = torch.nn.Linear(32*2*2, 32)
         self.flatten = torch.nn.Flatten()
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass for the Encoder. Returns the embeddings, mean, and log variance.
+        Forward pass for the Encoder.
         """
-        z = self.layers(x)
-        flat = self.flatten(z)
-        return z, self.mu(flat), self.logvar(flat)
+        return self.layers(x)
 
 
 class DecoderBlock(torch.nn.Module):
@@ -187,6 +299,40 @@ class DecoderBlock(torch.nn.Module):
         return torch.nn.functional.relu(out + residual)
 
 
+'''
+class DecoderBlockUpsample(torch.nn.Module):
+    """
+    Represents a Residual Decoder Block for the AutoEncoder. The block is built with
+    the ResNet style specifications:
+        - Transposed Convolutional Layer with kernel size 3x3
+        - Batch Normalization Layer
+        - ReLU Activation Layer
+        - Transposed Convolutional Layer with kernel size 3x3
+        - Batch Normalization Layer
+        - Residual Connection
+    :attrs:
+        - layers: The layers of the Decoder Block
+        - residual_conv: The convolutional layer for the residual connection
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
+        super(DecoderBlock, self).__init__()
+        self.block = torch.nn.Sequential(
+            torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            torch.nn.BatchNorm2d(out_channels),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.ConvTranspose2d(out_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
+            torch.nn.BatchNorm2d(out_channels)
+        )
+        self.upsample = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.block(x)
+        residual = torch.nn.functional.interpolate(self.upsample(x), size=out.shape[2:], mode="bicubic")
+        return torch.nn.functional.relu(out + residual)
+'''
+
+
 class Decoder(torch.nn.Module):
     """
     Represents the Decoder for the AutoEncoder. The Decoder consists of 5 Decoder
@@ -200,14 +346,13 @@ class Decoder(torch.nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
         self.layers = torch.nn.Sequential(
-            DecoderBlock(in_channels=128, out_channels=64, stride=1),
-            DecoderBlock(in_channels=64, out_channels=32, stride=3),
             DecoderBlock(in_channels=32, out_channels=16, stride=3),
             DecoderBlock(in_channels=16, out_channels=8, stride=3),
-            DecoderBlock(in_channels=8, out_channels=1, stride=1)
+            DecoderBlock(in_channels=8, out_channels=4, stride=3),
+            DecoderBlock(in_channels=4, out_channels=1, stride=1)
         )
-        self.fc = torch.nn.Linear(128, 128*2*2)
-        self.unflatten = torch.nn.Unflatten(dim=1, unflattened_size=(128, 2, 2))
+        self.fc = torch.nn.Linear(32, 32*2*2)
+        self.unflatten = torch.nn.Unflatten(dim=1, unflattened_size=(32, 2, 2))
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """
@@ -274,7 +419,7 @@ class AETrainer:
     Trainer for the AutoEncoder. The trainer trains the Encoder and Decoder on
     the given DataLoader using the given Loss Function and Optimizer. The trainer
     prints the mean loss and similarity for every 10th minibatch and for every epoch.
-    After every 5 epochs the trainer saves a 3D TSNE plot of logits of the train
+    After every 10 epochs the trainer saves a 3D TSNE plot of logits of the train
     set as AE_epoch_{}.png.
     :attrs:
         - paradigm: The paradigm of the trainer (AE)
@@ -320,14 +465,15 @@ class AETrainer:
                 self.optimizer.zero_grad()
 
                 if minibatch % 10 == 0:
-                    similarity = abs(self.similarity(target, denoised))
-                    total_similarity += similarity
+                    total_similarity += abs(self.similarity(target, denoised))
                     similarity_count += 1
-                    print(f">>>>> Epoch:{epoch}, Minibatch:{minibatch}, Loss:{loss.item()}, Similarity:{similarity}")
+                    avg_loss = total_loss / loss_count
+                    avg_similarity = total_similarity / similarity_count
+                    print(f">>>>> Epoch:{epoch}, Minibatch:{minibatch}, Loss:{avg_loss}, Similarity:{avg_similarity}")
 
-            similarity = total_similarity / similarity_count
-            loss = total_loss / loss_count
-            print(f"----- Epoch:{epoch}, Loss:{loss}, Similarity:{similarity}")
+            avg_similarity = total_similarity / similarity_count
+            avg_loss = total_loss / loss_count
+            print(f"----- Epoch:{epoch}, Loss:{avg_loss}, Similarity:{avg_similarity}")
 
             if epoch % 10 == 9: self.tsne_plot(epoch+1)
 
@@ -336,8 +482,8 @@ class AETrainer:
         Processes a single training batch of noisy and target images and
         returns the denoised images and the loss tensor.
         """
-        logits, _, _ = self.encoder(noisy)
-        denoised = self.decoder(logits)
+        z = self.encoder(noisy)
+        denoised = self.decoder(z)
         return denoised, self.loss_fn(denoised, target)
 
     def similarity(self, target: torch.Tensor, output: torch.Tensor) -> float:
@@ -359,12 +505,15 @@ class AETrainer:
         self.encoder.eval()
         logits, labels = [], []
         with torch.no_grad():
-            for noisy, _, label in self.dataloader:
+            for i, (noisy, _, label) in enumerate(self.dataloader):
+                if i % 2: continue
                 noisy = noisy.to(self.device)
-                embeddings, _, _ = self.encoder(noisy)
-                logits.append(embeddings.detach().cpu().view(-1, 128*2*2))
+                embeddings = self.encoder(noisy)
+                if self.paradigm == "VAE":
+                    embeddings = self.reparameterize(embeddings)
+                logits.append(embeddings.detach().cpu().view(-1, 32*2*2))
                 labels.append(label.flatten())
-            logits = torch.cat(logits, dim=0).view(-1, 128*2*2)
+            logits = torch.cat(logits, dim=0).view(-1, 32*2*2)
             labels = torch.cat(labels, dim=0).flatten()
 
         logits = TSNE(n_components=3).fit_transform(logits, labels)
@@ -379,7 +528,7 @@ class AETrainer:
 class VAETrainer(AETrainer):
     """
     Trainer for the Variational version of the AutoEncoder. The TSNE plots are
-    saved as VAE_epoch_{}.png.
+    saved as VAE_epoch_{}.png after every 10th epoch.
     """
 
     def __init__(
@@ -397,17 +546,26 @@ class VAETrainer(AETrainer):
         eps = torch.randn_like(std)
         return mu + eps*std
 
+    def bottleneck(self, embeddings: torch.Tensor) -> tuple[torch.Tensor]:
+        """
+        Processes the embeddings to get the latent space and the mean and log variance.
+        """
+        mu, logvar = self.encoder.mu(embeddings), self.encoder.logvar(embeddings)
+        logits = self.reparameterize(mu, logvar)
+        return logits, mu, logvar
+
     def train_batch(self, noisy: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor]:
         """
         Processes a single training batch of noisy and target images and
         returns the denoised images and the loss tensor.
         """
-        _, mu, logvar = self.encoder(noisy)
-        denoised = self.decoder(self.reparameterize(mu, logvar))
+        h = self.encoder(noisy)
+        z, mu, logvar = self.bottleneck(h)
+        denoised = self.decoder(z)
         return denoised, self.loss_fn(denoised, target, mu, logvar)
 
 
-class CVAE_Trainer:
+class CVAE_Trainer(VAETrainer):
     """
     Write code for training Conditional Variational AutoEncoder here.
 
@@ -458,40 +616,3 @@ class CVAE_Generator:
 
     def save_image(digit, save_path):
         pass
-
-
-def peak_signal_to_noise_ratio(img1, img2):
-    if img1.shape[0] != 1:
-        raise Exception("Image of shape [1, H, W] required.")
-
-    img1, img2 = img1.to(torch.float64), img2.to(torch.float64)
-    mse = img1.sub(img2).pow(2).mean()
-    if mse == 0:
-        return float("inf")
-    else:
-        return 20 * torch.log10(255.0/torch.sqrt(mse)).item()
-
-
-def structure_similarity_index(img1, img2):
-    if img1.shape[0] != 1:
-        raise Exception("Image of shape [1, H, W] required.")
-
-    window_size, channels = 11, 1
-    K1, K2, DR = 0.01, 0.03, 255
-    C1, C2 = (K1*DR)**2, (K2*DR)**2
-
-    window = torch.randn(11)
-    window = window.div(window.sum())
-    window = window.unsqueeze(1).mul(window.unsqueeze(0)).unsqueeze(0).unsqueeze(0)
-
-    mu1 = F.conv2d(img1, window, padding=window_size//2, groups=channels)
-    mu2 = F.conv2d(img2, window, padding=window_size//2, groups=channels)
-    mu12 = mu1.pow(2).mul(mu2.pow(2))
-
-    sigma1_sq = F.conv2d(img1 * img1, window, padding=window_size//2, groups=channels) - mu1.pow(2)
-    sigma2_sq = F.conv2d(img2 * img2, window, padding=window_size//2, groups=channels) - mu2.pow(2)
-    sigma12 =  F.conv2d(img1 * img2, window, padding=window_size//2, groups=channels) - mu12
-
-    SSIM_n = (2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)
-    denom = ((mu1**2 + mu2**2 + C1) * (sigma1_sq + sigma2_sq + C2))
-    return torch.clamp((1 - SSIM_n / (denom + 1e-8)), min=0.0, max=1.0).mean().item()
