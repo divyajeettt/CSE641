@@ -358,7 +358,6 @@ class Decoder(torch.nn.Module):
         """
         Forward pass for the Decoder.
         """
-        z = self.unflatten(self.fc(z)) if z.dim() == 2 else z
         return self.layers(z)
 
 
@@ -442,7 +441,7 @@ class AETrainer:
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.device = torch.device("cuda" if gpu == "T" else "cpu")
-        self.train()
+        if isinstance(loss_fn, AELossFn): self.train()
 
     def train(self) -> None:
         """
@@ -451,7 +450,7 @@ class AETrainer:
         self.encoder.to(self.device)
         self.decoder.to(self.device)
 
-        for epoch in range(EPOCH):
+        for epoch in range(1, EPOCH+1):
             total_loss = total_similarity = 0
             loss_count = similarity_count = 0
 
@@ -475,7 +474,7 @@ class AETrainer:
             avg_loss = total_loss / loss_count
             print(f"----- Epoch:{epoch}, Loss:{avg_loss}, Similarity:{avg_similarity}")
 
-            if epoch % 10 == 9: self.tsne_plot(epoch+1)
+            if epoch % 10 == 0: self.tsne_plot(epoch)
 
     def train_batch(self, noisy: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor]:
         """
@@ -488,8 +487,7 @@ class AETrainer:
 
     def similarity(self, target: torch.Tensor, output: torch.Tensor) -> float:
         """
-        Computes the Structural Similarity Index between the target and output
-        images.
+        Computes the Structural Similarity Index between the target and output images.
         """
         scores = []
         for i in range(target.shape[0]):
@@ -497,6 +495,12 @@ class AETrainer:
             image2 = (255 * output[i, 0, :, :].squeeze().detach().cpu().numpy()).astype("uint8")
             scores.append(structural_similarity(image1, image2))
         return sum(scores) / len(scores)
+
+    def get_embeddings(self, noisy: torch.Tensor) -> torch.Tensor:
+        """
+        Returns the embeddings for the given noisy image batch.
+        """
+        return self.encoder(noisy)
 
     def tsne_plot(self, epoch: int) -> None:
         """
@@ -508,12 +512,11 @@ class AETrainer:
             for i, (noisy, _, label) in enumerate(self.dataloader):
                 if i % 2: continue
                 noisy = noisy.to(self.device)
-                embeddings = self.encoder(noisy)
-                if self.paradigm == "VAE":
-                    embeddings = self.reparameterize(embeddings)
-                logits.append(embeddings.detach().cpu().view(-1, 32*2*2))
+                embeddings = self.get_embeddings(noisy)
+                size = embeddings.shape[1] * embeddings.shape[2] * embeddings.shape[3]
+                logits.append(embeddings.detach().cpu().view(-1, size))
                 labels.append(label.flatten())
-            logits = torch.cat(logits, dim=0).view(-1, 32*2*2)
+            logits = torch.cat(logits, dim=0).view(-1, size)
             labels = torch.cat(labels, dim=0).flatten()
 
         logits = TSNE(n_components=3).fit_transform(logits, labels)
@@ -537,6 +540,7 @@ class VAETrainer(AETrainer):
     ):
         super(VAETrainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu)
         self.paradigm = "VAE"
+        if isinstance(loss_fn, VAELossFn): self.train()
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
@@ -546,10 +550,11 @@ class VAETrainer(AETrainer):
         eps = torch.randn_like(std)
         return mu + eps*std
 
-    def bottleneck(self, embeddings: torch.Tensor) -> tuple[torch.Tensor]:
+    def bottleneck(self, h: torch.Tensor) -> tuple[torch.Tensor]:
         """
         Processes the embeddings to get the latent space and the mean and log variance.
         """
+        embeddings = self.encoder.flatten(h)
         mu, logvar = self.encoder.mu(embeddings), self.encoder.logvar(embeddings)
         logits = self.reparameterize(mu, logvar)
         return logits, mu, logvar
@@ -561,8 +566,14 @@ class VAETrainer(AETrainer):
         """
         h = self.encoder(noisy)
         z, mu, logvar = self.bottleneck(h)
-        denoised = self.decoder(z)
+        denoised = self.decoder(self.decoder.unflatten(self.decoder.fc(z)))
         return denoised, self.loss_fn(denoised, target, mu, logvar)
+
+    def get_emeddings(self, noisy: torch.Tensor) -> torch.Tensor:
+        """
+        Returns the embeddings for the given noisy image batch.
+        """
+        return self.bottleneck(self.encoder(noisy))[0]
 
 
 class CVAE_Trainer(VAETrainer):
