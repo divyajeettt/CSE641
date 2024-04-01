@@ -77,8 +77,8 @@ class AlteredMNIST:
 from sklearn.mixture import GaussianMixture
 import tqdm
 
-
-class AlteredMNIST:
+'''
+class AlteredMNIST_GMM_1:
     """
     Represents the given modified MNIST dataset. Due to the unavailability of the
     original mapping for augmentation, we map four augmented images per label to
@@ -93,6 +93,7 @@ class AlteredMNIST:
         - mapping: Mapping of augmented images to clean images
         - transform: The preprocessing transformation pipeline
     """
+
     def __init__(self):
         self.root = os.getcwd()
         self.augmented = [os.path.join(r"Data/aug", image) for image in os.listdir(os.path.join(self.root, r"Data/aug"))]
@@ -152,6 +153,7 @@ class AlteredMNIST:
         likelihoods = self.GMMS[label].score_samples(aug.reshape(1, -1))
         closest = torch.argmax(torch.tensor(likelihoods)).item()
         return self.clean[label][closest]
+'''
 
 
 class EncoderBlock(torch.nn.Module):
@@ -194,41 +196,6 @@ class EncoderBlock(torch.nn.Module):
         return torch.nn.functional.relu(out + residual)
 
 
-'''
-class EncoderBlockDownsample(torch.nn.Module):
-    """
-    Represents a Residual Encoder Block for the AutoEncoder. The block is built with
-    the ResNet style specifications:
-        - Convolutional Layer with kernel size 3x3
-        - Batch Normalization Layer
-        - ReLU Activation Layer
-        - Convolutional Layer with kernel size 3x3
-        - Batch Normalization Layer
-        - Residual Connection
-    :attrs:
-        - layers: The layers of the Encoder Block
-        - residual_conv: The convolutional layer for the residual connection
-    """
-
-    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
-        super(EncoderBlock, self).__init__()
-        self.layers = torch.nn.Sequential(
-            torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
-            torch.nn.BatchNorm2d(out_channels),
-            torch.nn.ReLU(inplace=True),
-            torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            torch.nn.BatchNorm2d(out_channels)
-        )
-        self.downsample = torch.nn.MaxPool2d(kernel_size=3, stride=2)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.layers(x)
-        residual = [self.downsample(x)] * (out.shape[1] // x.shape[1])
-        residual = torch.concatenate(residual, dim=1)
-        return torch.nn.functional.relu(out + residual[:, :, :out.shape[2], :out.shape[3]])
-'''
-
-
 class Encoder(torch.nn.Module):
     """
     Represents the Encoder for the AutoEncoder. The Encoder consists of 5 Encoder
@@ -251,6 +218,10 @@ class Encoder(torch.nn.Module):
         self.mu = torch.nn.Linear(32*2*2, 32)
         self.logvar = torch.nn.Linear(32*2*2, 32)
         self.flatten = torch.nn.Flatten()
+        self.label_embedding = torch.nn.Sequential(
+            torch.nn.Linear(10, 32),
+            torch.nn.ReLU(inplace=True)
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -260,47 +231,6 @@ class Encoder(torch.nn.Module):
 
 
 class DecoderBlock(torch.nn.Module):
-    """
-    Represents a Residual Decoder Block for the AutoEncoder. The block is built with
-    the ResNet style specifications:
-        - Transposed Convolutional Layer with kernel size 3x3
-        - Batch Normalization Layer
-        - ReLU Activation Layer
-        - Transposed Convolutional Layer with kernel size 3x3
-        - Batch Normalization Layer
-        - Residual Connection
-    :attrs:
-        - layers: The layers of the Decoder Block
-        - residual_conv: The convolutional layer for the residual connection
-    """
-
-    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
-        super(DecoderBlock, self).__init__()
-        self.layers = torch.nn.Sequential(
-            torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            torch.nn.BatchNorm2d(out_channels),
-            torch.nn.ReLU(inplace=True),
-            torch.nn.ConvTranspose2d(out_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
-            torch.nn.BatchNorm2d(out_channels)
-        )
-        self.residual_conv = torch.nn.Sequential(
-            torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-            torch.nn.BatchNorm2d(out_channels)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass for the Decoder Block.
-        """
-        residual = x
-        out = self.layers(x)
-        if out.shape != residual.shape:
-            residual = self.residual_conv(x)
-        return torch.nn.functional.relu(out + residual)
-
-
-'''
-class DecoderBlockUpsample(torch.nn.Module):
     """
     Represents a Residual Decoder Block for the AutoEncoder. The block is built with
     the ResNet style specifications:
@@ -330,7 +260,6 @@ class DecoderBlockUpsample(torch.nn.Module):
         out = self.block(x)
         residual = torch.nn.functional.interpolate(self.upsample(x), size=out.shape[2:], mode="bicubic")
         return torch.nn.functional.relu(out + residual)
-'''
 
 
 class Decoder(torch.nn.Module):
@@ -399,9 +328,10 @@ class VAELossFn(torch.nn.Module):
         return (1 - (SSIM+1)/2).sum() + kl_div
 
 
-class CVAELossFn(torch.nn.Module):
+class CVAELossFn(VAELossFn):
     """
-    # TODO: Implement Conditional Variational AutoEncoder Loss Function
+    Represents the Loss Function for the Conditional Variational AutoEncoder. The loss
+    the same as the VAE Loss Function - a combination of SSIM and KL Divergence.
     """
     pass
 
@@ -454,9 +384,9 @@ class AETrainer:
             total_loss = total_similarity = 0
             loss_count = similarity_count = 0
 
-            for minibatch, (noisy, target, _) in enumerate(self.dataloader):
+            for minibatch, (noisy, target, labels) in enumerate(self.dataloader):
                 noisy, target = noisy.to(self.device), target.to(self.device)
-                denoised, loss = self.train_batch(noisy, target)
+                denoised, loss = self.train_batch(noisy, target, labels)
                 total_loss += loss.item()
                 loss_count += 1
                 loss.backward()
@@ -476,10 +406,11 @@ class AETrainer:
 
             if epoch % 10 == 0: self.tsne_plot(epoch)
 
-    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor]:
+    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor) -> tuple[torch.Tensor]:
         """
         Processes a single training batch of noisy and target images and
-        returns the denoised images and the loss tensor.
+        returns the denoised images and the loss tensor. Accepts labels to
+        be consistent with the CVAE.
         """
         z = self.encoder(noisy)
         denoised = self.decoder(z)
@@ -536,7 +467,7 @@ class VAETrainer(AETrainer):
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: bool
+        loss_fn: VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str
     ):
         super(VAETrainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu)
         self.paradigm = "VAE"
@@ -559,13 +490,21 @@ class VAETrainer(AETrainer):
         logits = self.reparameterize(mu, logvar)
         return logits, mu, logvar
 
-    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor]:
+    def condition(self, z: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+        """
+        Conditions the latent space on the label.
+        """
+        return z + torch.zeros_like(z)
+
+    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor) -> tuple[torch.Tensor]:
         """
         Processes a single training batch of noisy and target images and
-        returns the denoised images and the loss tensor.
+        returns the denoised images and the loss tensor. Accepts labels for
+        to be consistent with the CVAE.
         """
         h = self.encoder(noisy)
         z, mu, logvar = self.bottleneck(h)
+        z = self.condition(z, label)
         denoised = self.decoder(self.decoder.unflatten(self.decoder.fc(z)))
         return denoised, self.loss_fn(denoised, target, mu, logvar)
 
@@ -578,17 +517,37 @@ class VAETrainer(AETrainer):
 
 class CVAE_Trainer(VAETrainer):
     """
-    Write code for training Conditional Variational AutoEncoder here.
-
-    For each 10th minibatch use only this print statement
-    print(">>>>> Epoch:{}, Minibatch:{}, Loss:{}, Similarity:{}".format(epoch, minibatch, loss, similarity))
-
-    For each epoch use only this print statement
-    print("----- Epoch:{}, Loss:{}, Similarity:{}")
-
-    After every 5 epochs make 3D TSNE plot of logits of whole data and save the image as CVAE_epoch_{}.png
+    Trainer for the Conditional Variational AutoEncoder. The TSNE plots are saved
+    as CVAE_epoch_{}.png after every 10th epoch.
     """
-    pass
+
+    def __init__(
+        self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
+        loss_fn: CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str
+    ):
+        super(CVAE_Trainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu)
+        self.paradigm = "CVAE"
+        self.train()
+
+    def condition(self, z: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+        """
+        Conditions the latent space on the label.
+        """
+        return z + self.encoder.label_embedding(label.float())
+
+    def sample(self, label: torch.Tensor, n_samples: int = 1) -> torch.Tensor:
+        """
+        Samples the latent space for the given label.
+        """
+        self.encoder.eval()
+        self.decoder.eval()
+        with torch.no_grad():
+            z = torch.randn(n_samples, 32).to(self.device)
+            z = self.condition(z, label)
+            samples = self.decoder(self.decoder.unflatten(self.decoder.fc(z)))
+        self.encoder.train()
+        self.decoder.train()
+        return samples
 
 
 class AE_TRAINED:
