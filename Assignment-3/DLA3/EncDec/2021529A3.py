@@ -8,7 +8,7 @@ from sklearn.manifold import TSNE
 from skimage.metrics import structural_similarity
 
 '''
-class AlteredMNIST:
+class AlteredMNIST_4to1:
     """
     Represents the given modified MNIST dataset. Due to the unavailability of the
     original mapping for augmentation, we map four augmented images per label to
@@ -156,6 +156,127 @@ class AlteredMNIST_GMM_1:
 '''
 
 
+class AlteredMNIST:
+    """
+    Represents the given modified MNIST dataset. We try to estimate the original
+    mapping of the dataset using 10 Gaussian Mixture Models (one for each class).
+    Each augmented image is then mapped to its closest clean image within the
+    cluster of the GMM that it belongs to. The images are named "Data/X/X_I_L.png":
+        - X: {aug=[augmented], clean=[clean]}
+        - I: {Index range(0, 60000)}
+        - L: {Labels range(10)}
+    :attrs:
+        - root: The root directory
+        - augmented: The list of paths to augmented images
+        - augmented_tensors: The list of loaded augmented image tensors
+        - clean_tensors: Labelwise mapping of clean image tensors
+        - mapping: Mapping of augmented images to clean images
+        - transform: The preprocessing transformation pipeline
+        - GMMS: The Gaussian Mixture Models for the clean images
+        - clean_clusters: The predicted clusters for each clean image
+    """
+
+    def __init__(self):
+        self.root = os.getcwd()
+        self.augmented = [os.path.join(r"Data/aug", image) for image in os.listdir(os.path.join(self.root, r"Data/aug"))]
+        self.augmented_tensors = {}
+
+        self.clean = {str(label): [] for label in range(10)}
+        for image in os.listdir(os.path.join(self.root, r"Data/clean")):
+            label = image[-5]
+            image_path = os.path.join(r"Data/clean", image)
+            self.clean[label].append(image_path)
+
+        self.transform = torchvision.transforms.Compose([
+            torchvision.transforms.Grayscale(num_output_channels=1),
+            torchvision.transforms.Resize((28, 28)),
+            torchvision.transforms.ToTensor()
+        ])
+
+        # self._create_gmms(n_components=15)
+        # self._create_mapping()
+
+        import pickle
+        # with open("mapping.pkl", "wb") as f1, open("augmented_tensors.pkl", "wb") as f2:
+        #     pickle.dump(self.mapping, f1)
+        #     pickle.dump(self.augmented_tensors, f2)
+        print("Loading Mappings")
+        with open("mapping.pkl", "rb") as f1, open("augmented_tensors.pkl", "rb") as f2:
+            self.mapping = pickle.load(f1)
+            self.augmented_tensors = pickle.load(f2)
+
+    def __len__(self) -> int:
+        """
+        Returns the length of the dataset.
+        """
+        return len(self.augmented)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor]:
+        """
+        Returns the augmented and clean image pair with the label of the image
+        at the given index.
+        """
+        aug_path = self.augmented[index]
+        aug = self.augmented_tensors[aug_path]
+        clean = self.mapping[aug_path]
+        return aug, clean, torch.tensor(int(aug_path[-5]))
+
+    def _load_image(self, path: str) -> torch.Tensor:
+        """
+        Reads the image at the given path and returns the processed tensor.
+        """
+        return self.transform(torchvision.transforms.functional.to_pil_image(
+            torchvision.io.read_image(os.path.join(self.root, path))
+        ))
+
+    def _create_gmms(self, n_components: int) -> None:
+        """
+        Creates the Gaussian Mixture Models for the clean images.
+        """
+        self.GMMS = {}
+        self.clean_clusters = {}
+
+        for label in range(10):
+            print("Creating GMM", label)
+            label = str(label)
+            clean_data = []
+            for clean_path in self.clean[label]:
+                clean_image = self._load_image(clean_path)
+                clean_data.append(clean_image.flatten())
+            clean_data = torch.stack(clean_data).view(-1, 28*28).numpy()
+
+            self.GMMS[label] = GaussianMixture(n_components=n_components)
+            self.GMMS[label].fit(clean_data)
+
+            predictions = self.GMMS[label].predict(clean_data)
+            self.clean_clusters[label] = {i: torch.zeros((0, 28, 28)) for i in range(n_components)}
+            for clean_image, prediction in zip(clean_data, predictions):
+                clean_tensor = torch.tensor(clean_image.reshape(1, 28, 28))
+                self.clean_clusters[label][prediction] = torch.cat((self.clean_clusters[label][prediction], clean_tensor))
+
+    def _create_mapping(self):
+        """
+        Creates the mapping of augmented images to clean images.
+        """
+        print("Creating Mapping")
+        self.mapping = {}
+        for aug_path in tqdm.tqdm(self.augmented):
+            aug_image = self._load_image(aug_path)
+            self.augmented_tensors[aug_path] = aug_image
+            self.mapping[aug_path] = self._get_closest_image(aug_image, aug_path[-5])
+
+    def _get_closest_image(self, aug_image: torch.Tensor, label: str) -> str:
+        """
+        Returns the closest clean image to the given augmented image.
+        """
+        aug_image = aug_image.flatten()
+        aug_predicted = self.GMMS[label].predict(aug_image.view(1, -1).numpy())[0]
+        clean_images = self.clean_clusters[label][aug_predicted]
+        distances = torch.norm(clean_images.view(-1, 784) - aug_image, dim=1)
+        closest_index = torch.argmin(distances)
+        return self.clean_clusters[label][aug_predicted][closest_index].reshape(1, 28, 28)
+
+
 class EncoderBlock(torch.nn.Module):
     """
     Represents a Residual Encoder Block for the AutoEncoder. The block is built with
@@ -205,6 +326,7 @@ class Encoder(torch.nn.Module):
         - mu: The linear layer for the mean of the latent space
         - logvar: The linear layer for the log variance of the latent space
         - flatten: The flattening layer
+        - label_embedding: The embedding layer for the labels
     """
 
     def __init__(self):
@@ -213,13 +335,14 @@ class Encoder(torch.nn.Module):
             EncoderBlock(in_channels=1, out_channels=4, stride=1),
             EncoderBlock(in_channels=4, out_channels=8, stride=3),
             EncoderBlock(in_channels=8, out_channels=16, stride=3),
-            EncoderBlock(in_channels=16, out_channels=32, stride=3)
+            EncoderBlock(in_channels=16, out_channels=32, stride=3),
+            EncoderBlock(in_channels=32, out_channels=64, stride=1)
         )
-        self.mu = torch.nn.Linear(32*2*2, 32)
-        self.logvar = torch.nn.Linear(32*2*2, 32)
+        self.mu = torch.nn.Linear(64*2*2, 64)
+        self.logvar = torch.nn.Linear(64*2*2, 64)
         self.flatten = torch.nn.Flatten()
         self.label_embedding = torch.nn.Sequential(
-            torch.nn.Linear(10, 32),
+            torch.nn.Linear(10, 64),
             torch.nn.ReLU(inplace=True)
         )
 
@@ -275,13 +398,14 @@ class Decoder(torch.nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
         self.layers = torch.nn.Sequential(
+            DecoderBlock(in_channels=64, out_channels=32, stride=1),
             DecoderBlock(in_channels=32, out_channels=16, stride=3),
             DecoderBlock(in_channels=16, out_channels=8, stride=3),
             DecoderBlock(in_channels=8, out_channels=4, stride=3),
             DecoderBlock(in_channels=4, out_channels=1, stride=1)
         )
-        self.fc = torch.nn.Linear(32, 32*2*2)
-        self.unflatten = torch.nn.Unflatten(dim=1, unflattened_size=(32, 2, 2))
+        self.fc = torch.nn.Linear(64, 64*2*2)
+        self.unflatten = torch.nn.Unflatten(dim=1, unflattened_size=(64, 2, 2))
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """
@@ -292,27 +416,70 @@ class Decoder(torch.nn.Module):
 
 class AELossFn(torch.nn.Module):
     """
-    Represents the Loss Function for the AutoEncoder. The loss function is a modified
-    Mean Squared Error - it mimics the Structural Similarity Index, so we optimize
-    directly for SSIM (or at least that's the idea).
+    Represents the Loss Function for the AutoEncoder. The loss function is the
+    Mean Squared Error between the output and target images.
     """
 
     def __init__(self):
         super(AELossFn, self).__init__()
+        self.window_size = 11
+        self.window = self._create_window()
+
+    def _create_window(self) -> torch.Tensor:
+        """
+        Creates a 2D Gaussian window for the SSIM calculation.
+        """
+        _1D_window = self.gaussian(1.5).unsqueeze(1)
+        _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
+        return torch.Tensor(_2D_window.expand(1, 1, self.window_size, self.window_size).contiguous())
+
+    def gaussian(self, sigma: float) -> torch.Tensor:
+        """
+        Creates a 1D Gaussian window.
+        """
+        # gauss = torch.Tensor([
+            # torch.exp(-(x - self.window_size//2)**2 / float(2*sigma**2))
+            # for x in range(self.window_size)
+        # ])
+        x = torch.Tensor(range(self.window_size))
+        gauss = torch.exp(-(x - self.window_size//2)**2 / float(2*sigma**2))
+        return gauss / gauss.sum()
+
+    # def forward(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    #     """
+    #     Forward pass for the Loss Function.
+    #     """
+    #     return torch.nn.functional.mse_loss(output, target, reduction="sum")
 
     def forward(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
         Forward pass for the Loss Function.
         """
-        MSE = torch.nn.functional.mse_loss(output, target, reduction="none")
-        SSIM = torch.clamp((1 - MSE/255), min=0.0, max=1.0)
-        return (1 - (SSIM+1)/2).sum()
+        MSE = torch.nn.functional.mse_loss(output, target, reduction="sum")
+        SSIM = self.ssim(output, target)
+        return MSE + SSIM
+
+    def ssim(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the Structural Similarity Index between the target and output images.
+        """
+        C1, C2 = 0.01**2, 0.03**2
+        mu1 = torch.nn.functional.conv2d(output, self.window, padding=self.window_size//2, groups=1)
+        mu2 = torch.nn.functional.conv2d(target, self.window, padding=self.window_size//2, groups=1)
+        mu1_sq, mu2_sq, mu12 = mu1**2, mu2**2, mu1*mu2
+
+        sigma1_sq = torch.nn.functional.conv2d(output**2, self.window, padding=self.window_size//2, groups=1) - mu1_sq
+        sigma2_sq = torch.nn.functional.conv2d(target**2, self.window, padding=self.window_size//2, groups=1) - mu2_sq
+        sigma12 = torch.nn.functional.conv2d(output*target, self.window, padding=self.window_size//2, groups=1) - mu12
+
+        SSIM_map = ((2*mu12 + C1)*(2*sigma12 + C2)) / ((mu1_sq + mu2_sq + C1)*(sigma1_sq + sigma2_sq + C2))
+        return 1 - SSIM_map.mean()
 
 
-class VAELossFn(torch.nn.Module):
+class VAELossFn(AELossFn):
     """
     Represents the Loss Function for the Variational AutoEncoder. The loss function
-    is a combination of the (above-described) SSIM and KL Divergence.
+    is a combination of the AELoss (MSE) and KL Divergence.
     """
 
     def __init__(self):
@@ -322,16 +489,15 @@ class VAELossFn(torch.nn.Module):
         """
         Forward pass for the Loss Function.
         """
-        MSE = torch.nn.functional.mse_loss(output, target, reduction="none")
-        SSIM = torch.clamp((1 - MSE/255), min=0.0, max=1.0)
-        kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        return (1 - (SSIM+1)/2).sum() + kl_div
+        MSE = super(VAELossFn, self).forward(output, target)
+        KL_DIV = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        return MSE + KL_DIV
 
 
 class CVAELossFn(VAELossFn):
     """
     Represents the Loss Function for the Conditional Variational AutoEncoder. The loss
-    the same as the VAE Loss Function - a combination of SSIM and KL Divergence.
+    the same as the VAE Loss Function - a combination of MSE and KL Divergence.
     """
     pass
 
@@ -404,7 +570,7 @@ class AETrainer:
             avg_loss = total_loss / loss_count
             print(f"----- Epoch:{epoch}, Loss:{avg_loss}, Similarity:{avg_similarity}")
 
-            if epoch % 10 == 0: self.tsne_plot(epoch)
+            # if epoch % 10 == 0: self.tsne_plot(epoch)
 
     def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor) -> tuple[torch.Tensor]:
         """
@@ -504,7 +670,7 @@ class VAETrainer(AETrainer):
         """
         h = self.encoder(noisy)
         z, mu, logvar = self.bottleneck(h)
-        z = self.condition(z, label)
+        z = self.condition(z, labels)
         denoised = self.decoder(self.decoder.unflatten(self.decoder.fc(z)))
         return denoised, self.loss_fn(denoised, target, mu, logvar)
 
