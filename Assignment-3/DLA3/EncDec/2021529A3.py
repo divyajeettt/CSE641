@@ -7,77 +7,11 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from skimage.metrics import structural_similarity
 
-'''
-class AlteredMNIST_4to1:
-    """
-    Represents the given modified MNIST dataset. Due to the unavailability of the
-    original mapping for augmentation, we map four augmented images per label to
-    one clean image per label. The images are named "Data/X/X_I_L.png":
-        - X: {aug=[augmented], clean=[clean]}
-        - I: {Index range(0, 60000)}
-        - L: {Labels range(10)}
-    :attrs:
-        - root: The root directory
-        - augmented: The list of paths to augmented images
-        - clean: Labelwise mapping of clean images
-        - mapping: Mapping of augmented images to clean images
-        - transform: The preprocessing transformation pipeline
-    """
-
-    def __init__(self):
-        self.root = os.getcwd()
-        self.augmented = [os.path.join(r"Data/aug", image) for image in os.listdir(os.path.join(self.root, r"Data/aug"))]
-
-        self.clean = {str(label): [] for label in range(10)}
-        for image in os.listdir(os.path.join(self.root, r"Data/clean")):
-            label = image[-5]
-            self.clean[label].append(os.path.join(r"Data/clean", image))
-
-        self.mapping = {}
-        indices, counts = [0]*10, [0]*10
-        for aug in self.augmented:
-            label = int(aug[-5])
-            self.mapping[aug] = self.clean[str(label)][indices[label]]
-            counts[label] += 1
-            if counts[label] == 4:
-                indices[label] += 1
-                counts[label] = 0
-
-        self.transform = torchvision.transforms.Compose([
-            torchvision.transforms.Grayscale(num_output_channels=1),
-            torchvision.transforms.Resize((28, 28)),
-            torchvision.transforms.ToTensor()
-        ])
-
-    def __len__(self) -> int:
-        """
-        Returns the length of the dataset.
-        """
-        return len(self.augmented)
-
-    def __getitem__(self, index: int) -> tuple[torch.Tensor]:
-        """
-        Returns the augmented and clean image pair with the label of the image
-        at the given index.
-        """
-        aug_path = self.augmented[index]
-        aug = self.get_pil_image(aug_path)
-        clean = self.get_pil_image(self.mapping[aug_path])
-        return self.transform(aug), self.transform(clean), torch.tensor(int(aug_path[-5]))
-
-    def get_pil_image(self, path: str) -> "PIL.Image.Image":
-        """
-        Reads the image at the given path and returns the PIL image.
-        """
-        return torchvision.transforms.functional.to_pil_image(
-            torchvision.io.read_image(os.path.join(self.root, path))
-        )
-'''
 
 from sklearn.mixture import GaussianMixture
-import tqdm
+from tqdm import tqdm
 
-
+'''
 class AlteredMNIST:
     """
     Represents the given modified MNIST dataset. We try to estimate the original
@@ -90,9 +24,8 @@ class AlteredMNIST:
     :attrs:
         - root: The root directory
         - augmented: The list of paths to augmented images
-        - augmented_tensors: The list of loaded augmented image tensors
-        - clean_tensors: Labelwise mapping of clean image tensors
-        - mapping: Mapping of augmented images to clean images
+        - augmented_tensors: Mapping of augmented paths to their loaded image tensors
+        - mapping: Mapping of augmented paths to their closest clean images
         - transform: The preprocessing transformation pipeline
         - GMMS: The Gaussian Mixture Models for the clean images
         - clean_clusters: The predicted clusters for each clean image
@@ -197,6 +130,78 @@ class AlteredMNIST:
         distances = torch.norm(clean_images.view(-1, 784) - aug_image, dim=1)
         closest_index = torch.argmin(distances)
         return self.clean_clusters[label][aug_predicted][closest_index].reshape(1, 28, 28)
+'''
+
+class AlteredMNIST:
+    def __init__(self):
+        self.root = os.getcwd()
+        self.augmented = [os.path.join(r"Data/aug", image) for image in os.listdir(os.path.join(self.root, r"Data/aug"))]
+
+        self.transform = torchvision.transforms.Compose([
+            torchvision.transforms.Grayscale(num_output_channels=1),
+            torchvision.transforms.Resize((28, 28)),
+            torchvision.transforms.ToTensor()
+        ])
+
+        self.clean_tensors = {str(label): torch.zeros((0, 28, 28)) for label in range(10)}
+        for clean_path in tqdm(os.listdir(os.path.join(self.root, r"Data/clean"))):
+            label = clean_path[-5]
+            image_path = os.path.join(r"Data/clean", clean_path)
+            image_tensor = self._load_image(image_path)
+            self.clean_tensors[label] = torch.cat((self.clean_tensors[label], image_tensor))
+
+        self.augmented_tensors = {str(label): torch.zeros((0, 28, 28)) for label in range(10)}
+        self.aug_paths = {str(label): [] for label in range(10)}
+        for aug_path in tqdm(self.augmented):
+            label = aug_path[-5]
+            image_tensor = self._load_image(aug_path)
+            self.augmented_tensors[label] = torch.cat((self.augmented_tensors[label], image_tensor))
+            self.aug_paths[label].append(os.path.basename(aug_path))
+
+        self.mapping = {}
+        for label in range(10):
+            self._create_mapping(str(label))
+
+    def __len__(self) -> int:
+        """
+        Returns the length of the dataset.
+        """
+        return len(self.augmented)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor]:
+        """
+        Returns the augmented and clean image pair with the label of the image
+        at the given index.
+        """
+        aug_path = os.path.basename(self.augmented[index])
+        aug, clean = self.mapping[aug_path]
+        return aug, clean, torch.tensor(int(aug_path[-5]))
+
+    def _load_image(self, path: str) -> torch.Tensor:
+        """
+        Reads the image at the given path and returns the processed tensor.
+        """
+        return self.transform(torchvision.transforms.functional.to_pil_image(
+            torchvision.io.read_image(os.path.join(self.root, path))
+        ))
+
+    def _create_mapping(self, label):
+        clean_tensors = self.clean_tensors[label]
+        clean_blurred_1 = torchvision.transforms.functional.gaussian_blur(clean_tensors, 3, sigma=1.5)
+        clean_blurred_2 = torchvision.transforms.functional.gaussian_blur(clean_tensors, 5, sigma=2.25)
+        clean_features = torch.abs(clean_blurred_1 - clean_blurred_2).flatten(1)
+
+        aug_tensors = self.augmented_tensors[label]
+        aug_blurred_1 = torchvision.transforms.functional.gaussian_blur(aug_tensors, 3, sigma=1.5)
+        aug_blurred_2 = torchvision.transforms.functional.gaussian_blur(aug_tensors, 5, sigma=2.25)
+        aug_features = torch.abs(aug_blurred_1 - aug_blurred_2).flatten(1)
+
+        similarities = torch.matmul(aug_features, clean_features.T)
+        closest_index = torch.argmax(similarities, dim=1)
+        closest_images = clean_tensors[closest_index]
+
+        for aug_path, aug_tensor, closest_image in zip(self.aug_paths[label], aug_tensors, closest_images):
+            self.mapping[aug_path] = (aug_tensor.unsqueeze(0), closest_image.unsqueeze(0))
 
 
 class EncoderBlock(torch.nn.Module):
@@ -260,6 +265,7 @@ class Encoder(torch.nn.Module):
             EncoderBlock(in_channels=16, out_channels=32, stride=3),
             EncoderBlock(in_channels=32, out_channels=64, stride=1)
         )
+        self.fc = torch.nn.Linear(64*2*2, 64*2*2)
         self.mu = torch.nn.Linear(64*2*2, 64)
         self.logvar = torch.nn.Linear(64*2*2, 64)
         self.flatten = torch.nn.Flatten()
@@ -272,7 +278,7 @@ class Encoder(torch.nn.Module):
         """
         Forward pass for the Encoder.
         """
-        return self.layers(x)
+        return self.fc(self.layers(x).view(-1, 64*2*2)).view(-1, 64, 2, 2)
 
 
 class DecoderBlock(torch.nn.Module):
@@ -294,16 +300,24 @@ class DecoderBlock(torch.nn.Module):
         super(DecoderBlock, self).__init__()
         self.block = torch.nn.Sequential(
             torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            torch.nn.BatchNorm2d(out_channels),
+            # torch.nn.BatchNorm2d(out_channels),
             torch.nn.ReLU(inplace=True),
             torch.nn.ConvTranspose2d(out_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
-            torch.nn.BatchNorm2d(out_channels)
+            # torch.nn.BatchNorm2d(out_channels)
         )
-        self.upsample = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.residual_conv = torch.nn.Sequential(
+            torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+            # torch.nn.BatchNorm2d(out_channels)
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the Decoder Block.
+        """
+        residual = x
         out = self.block(x)
-        residual = torch.nn.functional.interpolate(self.upsample(x), size=out.shape[2:], mode="bicubic")
+        if out.shape != residual.shape:
+            residual = self.residual_conv(x)
         return torch.nn.functional.relu(out + residual)
 
 
@@ -339,69 +353,23 @@ class Decoder(torch.nn.Module):
 class AELossFn(torch.nn.Module):
     """
     Represents the Loss Function for the AutoEncoder. The loss function is the
-    Mean Squared Error between the output and target images.
+    MSE between the output and target.
     """
 
     def __init__(self):
         super(AELossFn, self).__init__()
-        self.window_size = 11
-        self.window = self._create_window()
-
-    def _create_window(self) -> torch.Tensor:
-        """
-        Creates a 2D Gaussian window for the SSIM calculation.
-        """
-        _1D_window = self.gaussian(1.5).unsqueeze(1)
-        _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
-        return torch.Tensor(_2D_window.expand(1, 1, self.window_size, self.window_size).contiguous())
-
-    def gaussian(self, sigma: float) -> torch.Tensor:
-        """
-        Creates a 1D Gaussian window.
-        """
-        # gauss = torch.Tensor([
-            # torch.exp(-(x - self.window_size//2)**2 / float(2*sigma**2))
-            # for x in range(self.window_size)
-        # ])
-        x = torch.Tensor(range(self.window_size))
-        gauss = torch.exp(-(x - self.window_size//2)**2 / float(2*sigma**2))
-        return gauss / gauss.sum()
-
-    # def forward(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     Forward pass for the Loss Function.
-    #     """
-    #     return torch.nn.functional.mse_loss(output, target, reduction="sum")
 
     def forward(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
         Forward pass for the Loss Function.
         """
-        MSE = torch.nn.functional.mse_loss(output, target, reduction="sum")
-        SSIM = self.ssim(output, target)
-        return MSE + SSIM
-
-    def ssim(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """
-        Computes the Structural Similarity Index between the target and output images.
-        """
-        C1, C2 = 0.01**2, 0.03**2
-        mu1 = torch.nn.functional.conv2d(output, self.window, padding=self.window_size//2, groups=1)
-        mu2 = torch.nn.functional.conv2d(target, self.window, padding=self.window_size//2, groups=1)
-        mu1_sq, mu2_sq, mu12 = mu1**2, mu2**2, mu1*mu2
-
-        sigma1_sq = torch.nn.functional.conv2d(output**2, self.window, padding=self.window_size//2, groups=1) - mu1_sq
-        sigma2_sq = torch.nn.functional.conv2d(target**2, self.window, padding=self.window_size//2, groups=1) - mu2_sq
-        sigma12 = torch.nn.functional.conv2d(output*target, self.window, padding=self.window_size//2, groups=1) - mu12
-
-        SSIM_map = ((2*mu12 + C1)*(2*sigma12 + C2)) / ((mu1_sq + mu2_sq + C1)*(sigma1_sq + sigma2_sq + C2))
-        return 1 - SSIM_map.mean()
+        return torch.nn.functional.mse_loss(output, target)
 
 
 class VAELossFn(AELossFn):
     """
     Represents the Loss Function for the Variational AutoEncoder. The loss function
-    is a combination of the AELoss (MSE) and KL Divergence.
+    is a combination of the AELossFn (MSE) and KL Divergence.
     """
 
     def __init__(self):
@@ -411,15 +379,15 @@ class VAELossFn(AELossFn):
         """
         Forward pass for the Loss Function.
         """
-        MSE = super(VAELossFn, self).forward(output, target)
+        AE_loss = super(VAELossFn, self).forward(output, target)
         KL_DIV = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        return MSE + KL_DIV
+        return AE_loss + KL_DIV
 
 
 class CVAELossFn(VAELossFn):
     """
     Represents the Loss Function for the Conditional Variational AutoEncoder. The loss
-    the same as the VAE Loss Function - a combination of MSE and KL Divergence.
+    the same as the VAE Loss Function - a combination of MSE, and KL Divergence.
     """
     pass
 
@@ -450,16 +418,17 @@ class AETrainer:
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: AELossFn|VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str
+        loss_fn: AELossFn|VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str,
+        paradigm: str = "AE"
     ):
-        self.paradigm = "AE"
+        self.paradigm = paradigm
         self.dataloader = dataloader
         self.encoder = encoder
         self.decoder = decoder
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.device = torch.device("cuda" if gpu == "T" else "cpu")
-        if isinstance(loss_fn, AELossFn): self.train()
+        self.train()
 
     def train(self) -> None:
         """
@@ -492,7 +461,9 @@ class AETrainer:
             avg_loss = total_loss / loss_count
             print(f"----- Epoch:{epoch}, Loss:{avg_loss}, Similarity:{avg_similarity}")
 
-            # if epoch % 10 == 0: self.tsne_plot(epoch)
+            # if epoch % 10 == 0:
+            #     self.save_model()
+            #     self.tsne_plot(epoch)
 
     def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor) -> tuple[torch.Tensor]:
         """
@@ -529,7 +500,7 @@ class AETrainer:
         logits, labels = [], []
         with torch.no_grad():
             for i, (noisy, _, label) in enumerate(self.dataloader):
-                if i % 2: continue
+                if i % 10 != 0: continue
                 noisy = noisy.to(self.device)
                 embeddings = self.get_embeddings(noisy)
                 size = embeddings.shape[1] * embeddings.shape[2] * embeddings.shape[3]
@@ -546,6 +517,13 @@ class AETrainer:
         plt.close()
         self.encoder.train()
 
+    def save_model(self) -> None:
+        """
+        Saves the Encoder and Decoder models.
+        """
+        torch.save(self.encoder.state_dict(), f"{self.paradigm}_encoder.pth")
+        torch.save(self.decoder.state_dict(), f"{self.paradigm}_decoder.pth")
+
 
 class VAETrainer(AETrainer):
     """
@@ -555,11 +533,10 @@ class VAETrainer(AETrainer):
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str
+        loss_fn: VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str,
+        paradigm: str = "VAE"
     ):
-        super(VAETrainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu)
-        self.paradigm = "VAE"
-        if isinstance(loss_fn, VAELossFn): self.train()
+        super(VAETrainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu, paradigm=paradigm)
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
@@ -613,9 +590,7 @@ class CVAE_Trainer(VAETrainer):
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
         loss_fn: CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str
     ):
-        super(CVAE_Trainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu)
-        self.paradigm = "CVAE"
-        self.train()
+        super(CVAE_Trainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu, paradigm="CVAE")
 
     def condition(self, z: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
         """
@@ -644,26 +619,80 @@ class AE_TRAINED:
     use forward pass of both encoder-decoder to get output image.
     """
 
-    def __init__(self, gpu: bool):
-        pass
+    def __init__(self, gpu: bool, paradigm: str = "AE"):
+        self.paradigm = paradigm
+        self.gpu = gpu
+        self.transform = torchvision.transforms.Compose([
+            torchvision.transforms.Grayscale(num_output_channels=1),
+            torchvision.transforms.Resize((28, 28)),
+            torchvision.transforms.ToTensor()
+        ])
+        self.device = torch.device("cuda" if gpu else "cpu")
+        self._load_model()
 
-    def from_path(self, sample, original, type):
-        "Compute similarity score of both 'sample' and 'original' and return in float"
-        pass
+    def _load_model(self) -> None:
+        """
+        Loads the Encoder and Decoder models in .eval() mode.
+        """
+        self.encoder = Encoder().to(self.device)
+        self.decoder = Decoder().to(self.device)
+        self.encoder.load_state_dict(torch.load(f"{self.paradigm}_encoder.pth"))
+        self.decoder.load_state_dict(torch.load(f"{self.paradigm}_decoder.pth"))
+        self.encoder.eval()
+        self.decoder.eval()
+
+    def _load_image(self, path: str) -> torch.Tensor:
+        """
+        Reads the image at the given path and returns the processed tensor.
+        """
+        image = torchvision.io.read_image(path)
+        image = torchvision.transforms.functional.to_pil_image(image)
+        return image.unsqueeze(0).to(self.device)
+
+    def from_path(self, sample: str, original: str, type: str) -> float:
+        """
+        Compute similarity score of both 'sample' and 'original' and return in float
+        """
+        sample = self._load_image(sample)
+        original = self._load_image(original)
+        denoised = self.get_denoised(sample)
+        if type == "SSIM":
+            return structure_similarity_index(original, denoised)
+        else:
+            return peak_signal_to_noise_ratio(original, denoised)
+
+    def get_denoised(self, noisy: torch.Tensor) -> torch.Tensor:
+        """
+        Returns the denoised image for the given noisy image.
+        Input Shape: [1, 1, H, W]
+        Output Shape: [1, H, W]
+        """
+        with torch.no_grad():
+            z = self.encoder(noisy)
+            denoised = self.decoder(z)
+        return denoised.squeeze(0)
 
 
-class VAE_TRAINED:
+class VAE_TRAINED(AE_TRAINED):
     """
     Write code for loading trained Encoder-Decoder from saved checkpoints for Autoencoder paradigm here.
     use forward pass of both encoder-decoder to get output image.
     """
 
     def __init__(self, gpu: bool):
-        pass
+        super(VAE_TRAINED, self).__init__(gpu, paradigm="VAE")
 
-    def from_path(self, sample, original, type):
-        "Compute similarity score of both 'sample' and 'original' and return in float"
-        pass
+    def get_denoised(self, noisy: torch.Tensor) -> torch.Tensor:
+        """
+        Returns the denoised image for the given noisy image.
+        Input Shape: [1, 1, H, W]
+        Output Shape: [1, H, W]
+        """
+        with torch.no_grad():
+            h = self.encoder(noisy)
+            z, _, _ = self.bottleneck(h)
+            denoised = self.decoder(self.decoder.unflatten(self.decoder.fc(z)))
+        return denoised.squeeze(0)
 
 
 class CVAE_Generator:
@@ -672,5 +701,44 @@ class CVAE_Generator:
     use forward pass of both encoder-decoder to get output image conditioned to the class.
     """
 
-    def save_image(digit, save_path):
+    def save_image(digit: int, save_path: str) -> None:
+        """
+        Save the generated image of the given digit at the save_path.
+        """
         pass
+
+
+def peak_signal_to_noise_ratio(img1: torch.Tensor, img2: torch.Tensor) -> float:
+    if img1.shape[0] != 1:
+        raise Exception("Image of shape [1, H, W] required.")
+    img1, img2 = img1.to(torch.float64), img2.to(torch.float64)
+    mse = img1.sub(img2).pow(2).mean()
+    if mse == 0:
+        return float("inf")
+    else:
+        return 20 * torch.log10(255.0/torch.sqrt(mse)).item()
+
+
+def structure_similarity_index(img1: torch.Tensor, img2: torch.Tensor) -> float:
+    if img1.shape[0] != 1:
+        raise Exception("Image of shape [1, H, W] required.")
+    # Constants
+    window_size, channels = 11, 1
+    K1, K2, DR = 0.01, 0.03, 255
+    C1, C2 = (K1*DR)**2, (K2*DR)**2
+
+    window = torch.randn(11)
+    window = window.div(window.sum())
+    window = window.unsqueeze(1).mul(window.unsqueeze(0)).unsqueeze(0).unsqueeze(0)
+
+    mu1 = torch.nn.functional.conv2d(img1, window, padding=window_size//2, groups=channels)
+    mu2 = torch.nn.functional.conv2d(img2, window, padding=window_size//2, groups=channels)
+    mu12 = mu1.pow(2).mul(mu2.pow(2))
+
+    sigma1_sq = torch.nn.functional.conv2d(img1*img1, window, padding=window_size//2, groups=channels) - mu1.pow(2)
+    sigma2_sq = torch.nn.functional.conv2d(img2*img2, window, padding=window_size//2, groups=channels) - mu2.pow(2)
+    sigma12 =  torch.nn.functional.conv2d(img1*img2, window, padding=window_size//2, groups=channels) - mu12
+
+    SSIM_n = (2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)
+    denom = ((mu1**2 + mu2**2 + C1) * (sigma1_sq + sigma2_sq + C2))
+    return torch.clamp((1 - SSIM_n / (denom + 1e-8)), min=0.0, max=1.0).mean().item()
