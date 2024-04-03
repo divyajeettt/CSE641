@@ -9,6 +9,34 @@ from skimage.metrics import structural_similarity
 
 
 class AlteredMNIST(torch.utils.data.Dataset):
+     """
+    Represents the given modified MNIST dataset. Due to the unavailability of the
+    original mapping for augmentation, we estimate the mapping using the Gaussian
+    difference method, which takes the difference of the images blurred with different
+    gaussian kernels and finds the closest clean image. The idea is that since
+    Gaussian noise has mean 0, the difference of the blurred images should be similar
+    to the difference of the clean images. The images are named "Data/X/X_I_L.png":
+        - X: {aug=[augmented], clean=[clean]}
+        - I: {Index range(0, 60000)}
+        - L: {Labels range(10)}
+    :attrs:
+        - root: The root directory
+        - augmented: The list of paths to all augmented images
+        - transform: The preprocessing transformation pipeline
+        - clean_tensors: The (concatenated) clean tensors for each label
+        - augmented_tensors: The (concatenated) augmented tensors for each label
+        - augmented_paths: The ordered list of paths of the augmented images for each label
+        - mapping: The mapping of augmented image paths to its (augmented_tensor, clean_tensor)
+    """
+
+    root: str
+    augmented: list[str]
+    transform: torchvision.transforms.Compose
+    clean_tensors: dict[str, torch.Tensor]
+    augmented_tensors: dict[str, torch.Tensor]
+    augmented_paths: dict[str, list[str]]
+    mapping: dict[str, tuple[torch.Tensor]]
+
     def __init__(self):
         self.root = os.getcwd()
         self.augmented = [os.path.join(r"Data/aug", image) for image in os.listdir(os.path.join(self.root, r"Data/aug"))]
@@ -27,12 +55,12 @@ class AlteredMNIST(torch.utils.data.Dataset):
             self.clean_tensors[label] = torch.cat((self.clean_tensors[label], image_tensor))
 
         self.augmented_tensors = {str(label): torch.zeros((0, 28, 28)) for label in range(10)}
-        self.aug_paths = {str(label): [] for label in range(10)}
+        self.augmented_paths = {str(label): [] for label in range(10)}
         for aug_path in self.augmented:
             label = aug_path[-5]
             image_tensor = self._load_image(aug_path)
             self.augmented_tensors[label] = torch.cat((self.augmented_tensors[label], image_tensor))
-            self.aug_paths[label].append(os.path.basename(aug_path))
+            self.augmented_paths[label].append(os.path.basename(aug_path))
 
         self.mapping = {}
         for label in range(10):
@@ -61,16 +89,23 @@ class AlteredMNIST(torch.utils.data.Dataset):
             torchvision.io.read_image(os.path.join(self.root, path))
         ))
 
-    def _create_mapping(self, label):
-        clean_tensors = self.clean_tensors[label]
-        clean_blurred_1 = torchvision.transforms.functional.gaussian_blur(clean_tensors, 3, sigma=0.3)
-        clean_blurred_2 = torchvision.transforms.functional.gaussian_blur(clean_tensors, 5, sigma=0.9)
-        clean_features = torch.abs(clean_blurred_1 - clean_blurred_2).flatten(1)
+    def _gaussian_difference(self, label: str, clean: bool = True) -> torch.Tensor:
+        """
+        Returns the Gaussian difference for the tensors of the given label
+        """
+        tensors = self.clean_tensors[label] if clean else self.augmented_tensors[label]
+        blurred_1 = torchvision.transforms.functional.gaussian_blur(tensors, 3, sigma=0.3)
+        blurred_2 = torchvision.transforms.functional.gaussian_blur(tensors, 5, sigma=0.9)
+        return torch.abs(blurred_1 - blurred_2).flatten(1)
 
-        aug_tensors = self.augmented_tensors[label]
-        aug_blurred_1 = torchvision.transforms.functional.gaussian_blur(aug_tensors, 3, sigma=0.3)
-        aug_blurred_2 = torchvision.transforms.functional.gaussian_blur(aug_tensors, 5, sigma=0.9)
-        aug_features = torch.abs(aug_blurred_1 - aug_blurred_2).flatten(1)
+    def _create_mapping(self, label: str) -> None:
+        """
+        Creates the mapping of augmented image paths to its (augmented_tensor, clean_tensor)
+        by mapping each augmented image to the clean image that maximizes the similarity
+        score between the Gaussian differences.
+        """
+        clean_features = self._gaussian_difference(label, clean=True)
+        aug_features = self._gaussian_difference(label, clean=False)
 
         similarities = torch.matmul(aug_features, clean_features.T)
         aug_mean = torch.norm(aug_features, dim=1, keepdim=True).expand_as(similarities)
@@ -78,7 +113,7 @@ class AlteredMNIST(torch.utils.data.Dataset):
         closest_index = torch.argmax(similarities/(aug_mean*clean_mean), dim=1)
         closest_images = clean_tensors[closest_index]
 
-        for aug_path, aug_tensor, closest_image in zip(self.aug_paths[label], aug_tensors, closest_images):
+        for aug_path, aug_tensor, closest_image in zip(self.augmented_paths[label], aug_tensors, closest_images):
             self.mapping[aug_path] = (aug_tensor.unsqueeze(0), closest_image.unsqueeze(0))
 
 
@@ -125,14 +160,14 @@ class EncoderBlock(torch.nn.Module):
 class Encoder(torch.nn.Module):
     """
     Represents the Encoder for the AutoEncoder. The Encoder consists of 5 Encoder
-    Blocks. The encoded logits/embeddings are of shape [batch_size, 64, 2, 2].
+    Blocks. The encoded logits/embeddings are of shape [batch_size, 128, 2, 2].
     :attrs:
         - layers: The layers of the Encoder
-        - fc: The layer to capture global features
+        - fc: The layer to capture global features after the Encoder Blocks
         - mu: The linear layer for the mean of the latent space
         - logvar: The linear layer for the log variance of the latent space
         - flatten: The flattening layer
-        - label_embedding: The embedding layer for the labels
+        - label_embedding: The embedding layer for the labels for the CVAE
     """
 
     def __init__(self):
@@ -144,8 +179,8 @@ class Encoder(torch.nn.Module):
             EncoderBlock(in_channels=32, out_channels=64, stride=3),
             EncoderBlock(in_channels=64, out_channels=128, stride=1)
         )
-        self.mu = torch.nn.Linear(128*2*2, 128)
         self.fc = torch.nn.Linear(128*2*2, 128*2*2)
+        self.mu = torch.nn.Linear(128*2*2, 128)
         self.logvar = torch.nn.Linear(128*2*2, 128)
         self.flatten = torch.nn.Flatten()
         self.label_embedding = torch.nn.Sequential(
@@ -177,14 +212,11 @@ class DecoderBlock(torch.nn.Module):
         super(DecoderBlock, self).__init__()
         self.layers = torch.nn.Sequential(
             torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            # torch.nn.BatchNorm2d(out_channels),
             torch.nn.ReLU(inplace=True),
             torch.nn.ConvTranspose2d(out_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
-            # torch.nn.BatchNorm2d(out_channels)
         )
         self.residual_conv = torch.nn.Sequential(
             torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-            # torch.nn.BatchNorm2d(out_channels)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -201,10 +233,11 @@ class DecoderBlock(torch.nn.Module):
 class Decoder(torch.nn.Module):
     """
     Represents the Decoder for the AutoEncoder. The Decoder consists of 5 Decoder
-    Blocks (to approximately undo the encoding). The output images are of shape [batch_size, 1, 28, 28].
+    Blocks (to approximately undo the encoding). The output images are of shape
+    [batch_size, 1, 28, 28].
     :attrs:
         - layers: The layers of the Decoder
-        - fc: The linear layer for transforming from the latent space to the initial shape
+        - fc: The linear layer for transforming from the latent space to the original shape
         - unflatten: The unflattening layer
     """
 
@@ -246,19 +279,26 @@ class AELossFn(torch.nn.Module):
 class VAELossFn(AELossFn):
     """
     Represents the Loss Function for the Variational AutoEncoder. The loss function
-    is a combination of the AELossFn (MSE) and KL Divergence.
+    is a combination of the AELossFn (MSE) and KL Divergence. The KL Divergence is
+    annealed over the epochs with weight 0 <= kl_weight <= 1.
+    :attrs:
+        - kl_weight: The weight for the KL Divergence
+        - anneal_epochs: The number of epochs to anneal the KL Divergence
     """
 
     def __init__(self):
         super(VAELossFn, self).__init__()
+        self.kl_weight = 0.0
+        self.anneal_epochs = EPOCH
 
-    def forward(self, output: torch.Tensor, target: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    def forward(self, output: torch.Tensor, target: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor, epoch: int) -> torch.Tensor:
         """
         Forward pass for the Loss Function.
         """
         AE_loss = super(VAELossFn, self).forward(output, target)
         KL_DIV = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        return AE_loss + KL_DIV
+        self.kl_weight = 1 - 0.5 ** (epoch / (self.anneal_epochs - 1)) if epoch < self.anneal_epochs else 1.0
+        return AE_loss + self.kl_weight*KL_DIV
 
 
 class CVAELossFn(VAELossFn):
@@ -281,8 +321,9 @@ class AETrainer:
     Trainer for the AutoEncoder. The trainer trains the Encoder and Decoder on
     the given DataLoader using the given Loss Function and Optimizer. The trainer
     prints the mean loss and similarity for every 10th minibatch and for every epoch.
-    After every 10 epochs the trainer saves a 3D TSNE plot of logits of the train
-    set as AE_epoch_{}.png.
+    After every 10 epochs, the trainer saves:
+        - a 3D TSNE plot of logits of the train set as AE_epoch_{}.png.
+        - the Encoder and Decoder models as AE_encoder.pth and AE_decoder.pth.
     :attrs:
         - paradigm: The paradigm of the trainer (AE)
         - dataloader: The DataLoader for the training data
@@ -295,8 +336,7 @@ class AETrainer:
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: AELossFn, optimizer: torch.optim.Optimizer, gpu: str,
-        paradigm: str = "AE"
+        loss_fn: AELossFn, optimizer: torch.optim.Optimizer, gpu: str, paradigm: str = "AE"
     ):
         self.paradigm = paradigm
         self.dataloader = dataloader
@@ -320,7 +360,7 @@ class AETrainer:
 
             for minibatch, (noisy, target, labels) in enumerate(self.dataloader):
                 noisy, target = noisy.to(self.device), target.to(self.device)
-                denoised, loss = self.train_batch(noisy, target, labels)
+                denoised, loss = self.train_batch(noisy, target, labels, epoch)
                 total_loss += loss.item()
                 loss_count += 1
                 loss.backward()
@@ -342,11 +382,12 @@ class AETrainer:
                 self.save_model()
                 self.tsne_plot(epoch)
 
-    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor) -> None:
+    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor, epoch: int) -> None:
         """
         Processes a single training batch of noisy and target images and
-        returns the denoised images and the loss tensor. Accepts labels to
-        be consistent with the CVAE.
+        returns the denoised images and the loss tensor.
+        Accepts epoch to be consistent with the VAE for KL Divergence annealing.
+        Accepts labels to be consistent with the CVAE for conditioning.
         """
         z = self.encoder(noisy)
         denoised = self.decoder(z)
@@ -355,6 +396,7 @@ class AETrainer:
     def similarity(self, target: torch.Tensor, output: torch.Tensor) -> float:
         """
         Computes the Structural Similarity Index between the target and output images.
+        Uses sklearn.metrics.structural_similarity as the SSIM calculator.
         """
         scores = []
         for i in range(target.shape[0]):
@@ -404,24 +446,25 @@ class AETrainer:
 
 class VAETrainer(AETrainer):
     """
-    Trainer for the Variational version of the AutoEncoder. The TSNE plots are
-    saved as VAE_epoch_{}.png after every 10th epoch.
+    Trainer for the Variational version of the AutoEncoder. The paradigm is set to VAE.
+    After every 10 epochs, the trainer saves:
+        - a 3D TSNE plot of logits of the train set as VAE_epoch_{}.png.
+        - the Encoder and Decoder models as VAE_encoder.pth and VAE_decoder.pth.
     """
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: VAELossFn, optimizer: torch.optim.Optimizer, gpu: str,
-        paradigm: str = "VAE"
+        loss_fn: VAELossFn, optimizer: torch.optim.Optimizer, gpu: str, paradigm: str = "VAE"
     ):
-        super(VAETrainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu, paradigm=paradigm)
+        super(VAETrainer, self).__init__(
+            dataloader, encoder, decoder, loss_fn, optimizer, gpu, paradigm=paradigm
+        )
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
         Reparameterizes the latent space to sample from the normal distribution.
         """
-        std = logvar.mul(0.5).exp_()
-        eps = torch.randn_like(std)
-        return mu + eps*std
+        return torch.normal(mu, torch.exp(0.5*logvar))
 
     def bottleneck(self, h: torch.Tensor) -> None:
         """
@@ -434,11 +477,11 @@ class VAETrainer(AETrainer):
 
     def condition(self, z: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
         """
-        Conditions the latent space on the label.
+        Dummy function to be consistent with the CVAE. Simply returns the latent space.
         """
         return z + torch.zeros_like(z)
 
-    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor) -> None:
+    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor, epoch: int) -> None:
         """
         Processes a single training batch of noisy and target images and
         returns the denoised images and the loss tensor. Accepts labels for
@@ -448,7 +491,7 @@ class VAETrainer(AETrainer):
         z, mu, logvar = self.bottleneck(h)
         z = self.condition(z, labels)
         denoised = self.decoder(self.decoder.unflatten(self.decoder.fc(z)))
-        return denoised, self.loss_fn(denoised, target, mu, logvar)
+        return denoised, self.loss_fn(denoised, target, mu, logvar, epoch)
 
     def get_emeddings(self, noisy: torch.Tensor) -> torch.Tensor:
         """
@@ -459,15 +502,19 @@ class VAETrainer(AETrainer):
 
 class CVAE_Trainer(VAETrainer):
     """
-    Trainer for the Conditional Variational AutoEncoder. The TSNE plots are saved
-    as CVAE_epoch_{}.png after every 10th epoch.
+    Trainer for the Conditional Variational AutoEncoder. The paradigm is set to CVAE.
+    After every 10 epochs, the trainer saves:
+        - a 3D TSNE plot of logits of the train set as CVAE_epoch_{}.png.
+        - the Encoder and Decoder models as CVAE_encoder.pth and CVAE_decoder.pth.
     """
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str = "T"
+        loss_fn: CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str = "F"
     ):
-        super(CVAE_Trainer, self).__init__(dataloader, encoder, decoder, loss_fn, optimizer, gpu, paradigm="CVAE")
+        super(CVAE_Trainer, self).__init__(
+            dataloader, encoder, decoder, loss_fn, optimizer, gpu, paradigm="CVAE"
+        )
 
     def condition(self, z: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
         """
@@ -480,8 +527,8 @@ class CVAE_Trainer(VAETrainer):
 
 class AE_TRAINED:
     """
-    Write code for loading trained Encoder-Decoder from saved checkpoints for Autoencoder paradigm here.
-    use forward pass of both encoder-decoder to get output image.
+    Loads the trained Encoder-Decoder from saved checkpoints for AE paradigm in
+    .eval() mode on the given device and provides methods to compute similarity scores.
     """
 
     def __init__(self, gpu: bool, paradigm: str = "AE"):
@@ -516,15 +563,15 @@ class AE_TRAINED:
 
     def from_path(self, sample: str, original: str, type: str) -> float:
         """
-        Compute similarity score of both 'sample' and 'original' and return in float
+        Computes the similarity score between the denoised image and the original image.
         """
         sample = self._load_image(sample)
         original = self._load_image(original)
         denoised = self.get_denoised(sample.to(self.device))
         if type == "SSIM":
-            original = original.view(28, 28).numpy()
-            denoised = denoised.view(28, 28).numpy()
-            return structural_similarity(original.view(28, 28), denoised.view(28, 28))
+            original = original.numpy().view(28, 28)
+            denoised = denoised.numpy().view(28, 28)
+            return structural_similarity(original, denoised)
         else:
             return peak_signal_to_noise_ratio(original, denoised)
 
@@ -542,8 +589,8 @@ class AE_TRAINED:
 
 class VAE_TRAINED(AE_TRAINED):
     """
-    Write code for loading trained Encoder-Decoder from saved checkpoints for Autoencoder paradigm here.
-    use forward pass of both encoder-decoder to get output image.
+    Loads the trained Encoder-Decoder from saved checkpoints for VAE paradigm in
+    .eval() mode on the given device and provides methods to compute similarity scores.
     """
 
     def __init__(self, gpu: bool):
@@ -564,8 +611,9 @@ class VAE_TRAINED(AE_TRAINED):
 
 class CVAE_Generator:
     """
-    Write code for loading trained Encoder-Decoder from saved checkpoints for Conditional Variational Autoencoder paradigm here.
-    use forward pass of both encoder-decoder to get output image conditioned to the class.
+    Generator for the Conditional Variational AutoEncoder. The generator is used to
+    generate images of a given digit. The generator loads the trained Encoder and
+    Decoder models in .eval() mode and provides a method to save the generated image.
     """
 
     def __init__(self):
@@ -578,7 +626,7 @@ class CVAE_Generator:
 
     def save_image(digit: int, save_path: str) -> None:
         """
-        Save the generated image of the given digit at the save_path.
+        Generates and save the generated image of the given digit at the save_path.
         """
         with torch.no_grad():
             z = torch.randn(1, 128)
@@ -591,6 +639,7 @@ class CVAE_Generator:
 def peak_signal_to_noise_ratio(img1: torch.Tensor, img2: torch.Tensor) -> float:
     if img1.shape[0] != 1:
         raise Exception("Image of shape [1, H, W] required.")
+
     img1, img2 = img1.to(torch.float64), img2.to(torch.float64)
     mse = img1.sub(img2).pow(2).mean()
     if mse == 0:
