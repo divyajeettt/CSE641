@@ -9,7 +9,7 @@ from skimage.metrics import structural_similarity
 
 
 class AlteredMNIST(torch.utils.data.Dataset):
-     """
+    """
     Represents the given modified MNIST dataset. Due to the unavailability of the
     original mapping for augmentation, we estimate the mapping using the Gaussian
     difference method, which takes the difference of the images blurred with different
