@@ -3,12 +3,7 @@ import torch
 import random
 import argparse
 from EncDec import *
-
-# from DLA3.EncDec.2021529A3 import *
-import importlib
-module = importlib.import_module("EncDec.2021529A3")
-globals().update(vars(module))
-
+from DLA3.EncDec.2021529A3 import *
 from torch.utils.data import DataLoader
 
 
