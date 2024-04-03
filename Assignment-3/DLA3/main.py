@@ -12,7 +12,7 @@ P.add_argument("gpu", type=str)
 P.add_argument("bonus", type=str)
 A = P.parse_args()
 
-__name__ = "__main__"
+
 if __name__ == "__main__":
     Data = DataLoader(
         dataset=AlteredMNIST(),
