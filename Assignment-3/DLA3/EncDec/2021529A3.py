@@ -179,11 +179,11 @@ class Encoder(torch.nn.Module):
             EncoderBlock(in_channels=64, out_channels=128, stride=1)
         )
         self.fc = torch.nn.Linear(128*2*2, 128*2*2)
-        self.mu = torch.nn.Linear(128*2*2, 128)
-        self.logvar = torch.nn.Linear(128*2*2, 128)
+        self.mu = torch.nn.Linear(128*2*2, 64)
+        self.logvar = torch.nn.Linear(128*2*2, 64)
         self.flatten = torch.nn.Flatten()
         self.label_embedding = torch.nn.Sequential(
-            torch.nn.Linear(10, 128),
+            torch.nn.Linear(10, 64),
             torch.nn.ReLU(inplace=True)
         )
 
@@ -249,7 +249,7 @@ class Decoder(torch.nn.Module):
             DecoderBlock(in_channels=16, out_channels=8, stride=3),
             DecoderBlock(in_channels=8, out_channels=1, stride=1)
         )
-        self.fc = torch.nn.Linear(128, 128*2*2)
+        self.fc = torch.nn.Linear(64, 128*2*2)
         self.unflatten = torch.nn.Unflatten(dim=1, unflattened_size=(128, 2, 2))
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
@@ -279,15 +279,15 @@ class VAELossFn(AELossFn):
     """
     Represents the Loss Function for the Variational AutoEncoder. The loss function
     is a combination of the AELossFn (MSE) and KL Divergence. The KL Divergence is
-    annealed over the epochs with weight 0 <= kl_weight <= 1.
+    annealed over the epochs with 0 <= weight <= 1.
     :attrs:
-        - kl_weight: The weight for the KL Divergence
+        - weight: The weight for the KL Divergence
         - anneal_epochs: The number of epochs to anneal the KL Divergence
     """
 
     def __init__(self):
         super(VAELossFn, self).__init__()
-        self.kl_weight = 0.0
+        self.weight = 0.0
         self.anneal_epochs = EPOCH
 
     def forward(self, output: torch.Tensor, target: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor, epoch: int) -> torch.Tensor:
@@ -296,8 +296,10 @@ class VAELossFn(AELossFn):
         """
         AE_loss = super(VAELossFn, self).forward(output, target)
         KL_DIV = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        self.kl_weight = 1 - 0.5 ** (epoch / (self.anneal_epochs - 1)) if epoch < self.anneal_epochs else 1.0
-        return AE_loss + self.kl_weight*KL_DIV
+        if epoch % 5 == 0 and self.anneal_epochs < 1:
+            self.weight += 1e-6
+            self.anneal_epochs -= 1
+        return AE_loss + self.weight*KL_DIV
 
 
 class CVAELossFn(VAELossFn):
@@ -396,7 +398,7 @@ class AETrainer:
     def similarity(self, target: torch.Tensor, output: torch.Tensor) -> float:
         """
         Computes the Structural Similarity Index between the target and output images.
-        Uses sklearn.metrics.structural_similarity as the SSIM calculator.
+        Uses skimage.metrics.structural_similarity as the SSIM calculator.
         """
         scores = []
         for i in range(target.shape[0]):
@@ -419,7 +421,6 @@ class AETrainer:
         logits, labels = [], []
         with torch.no_grad():
             for i, (noisy, _, label) in enumerate(self.dataloader):
-                if i % 10 != 0: continue
                 noisy = noisy.to(self.device)
                 embeddings = self.get_embeddings(noisy)
                 size = embeddings.shape[1] * embeddings.shape[2] * embeddings.shape[3]
@@ -465,7 +466,7 @@ class VAETrainer(AETrainer):
         """
         Reparameterizes the latent space to sample from the normal distribution.
         """
-        return torch.normal(mu, torch.exp(0.5*logvar))
+        return mu + torch.randn_like(mu) * torch.exp(0.5*logvar)
 
     def bottleneck(self, h: torch.Tensor) -> tuple[torch.Tensor]:
         """
@@ -566,6 +567,7 @@ class AE_TRAINED:
     def from_path(self, sample: str, original: str, type: str) -> float:
         """
         Computes the similarity score between the denoised image and the original image.
+        Uses skimage.metrics.structural_similarity for SSIM.
         """
         sample = self._load_image(sample)
         original = self._load_image(original)
@@ -631,7 +633,7 @@ class CVAE_Generator:
         Generates and save the generated image of the given digit at the save_path.
         """
         with torch.no_grad():
-            z = torch.randn(1, 128)
+            z = torch.randn(1, 64)
             label = torch.nn.functional.one_hot(torch.tensor([digit]).to(torch.int64), num_classes=10)
             z = z + self.encoder.label_embedding(label.float())
             image = self.decoder(self.decoder.unflatten(self.decoder.fc(z)))
