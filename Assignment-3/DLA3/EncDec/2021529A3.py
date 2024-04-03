@@ -89,11 +89,10 @@ class AlteredMNIST(torch.utils.data.Dataset):
             torchvision.io.read_image(os.path.join(self.root, path))
         ))
 
-    def _gaussian_difference(self, label: str, clean: bool = True) -> torch.Tensor:
+    def _gaussian_difference(self, tensors: torch.Tensor) -> torch.Tensor:
         """
-        Returns the Gaussian difference for the tensors of the given label
+        Returns the Gaussian difference of the given tensors.
         """
-        tensors = self.clean_tensors[label] if clean else self.augmented_tensors[label]
         blurred_1 = torchvision.transforms.functional.gaussian_blur(tensors, 3, sigma=0.3)
         blurred_2 = torchvision.transforms.functional.gaussian_blur(tensors, 5, sigma=0.9)
         return torch.abs(blurred_1 - blurred_2).flatten(1)
@@ -104,8 +103,8 @@ class AlteredMNIST(torch.utils.data.Dataset):
         by mapping each augmented image to the clean image that maximizes the similarity
         score between the Gaussian differences.
         """
-        clean_features = self._gaussian_difference(label, clean=True)
-        aug_features = self._gaussian_difference(label, clean=False)
+        clean_features = self._gaussian_difference(clean_tensors := self.clean_tensors[label])
+        aug_features = self._gaussian_difference(aug_tensors := self.augmented_tensors[label])
 
         similarities = torch.matmul(aug_features, clean_features.T)
         aug_mean = torch.norm(aug_features, dim=1, keepdim=True).expand_as(similarities)
@@ -309,7 +308,7 @@ class CVAELossFn(VAELossFn):
     pass
 
 
-def ParameterSelector(encoder: Encoder, decoder: Decoder):
+def ParameterSelector(encoder: Encoder, decoder: Decoder) -> list[torch.nn.Parameter]:
     """
     Returns the trainable parameters of the Encoder and Decoder.
     """
@@ -336,7 +335,8 @@ class AETrainer:
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: AELossFn, optimizer: torch.optim.Optimizer, gpu: str, paradigm: str = "AE"
+        loss_fn: AELossFn|VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str,
+        paradigm: str = "AE"
     ):
         self.paradigm = paradigm
         self.dataloader = dataloader
@@ -382,7 +382,7 @@ class AETrainer:
                 self.save_model()
                 self.tsne_plot(epoch)
 
-    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor, epoch: int) -> None:
+    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor, epoch: int) -> tuple[torch.Tensor]:
         """
         Processes a single training batch of noisy and target images and
         returns the denoised images and the loss tensor.
@@ -454,7 +454,8 @@ class VAETrainer(AETrainer):
 
     def __init__(
         self, dataloader: torch.utils.data.DataLoader, encoder: Encoder, decoder: Decoder,
-        loss_fn: VAELossFn, optimizer: torch.optim.Optimizer, gpu: str, paradigm: str = "VAE"
+        loss_fn: VAELossFn|CVAELossFn, optimizer: torch.optim.Optimizer, gpu: str,
+        paradigm: str = "VAE"
     ):
         super(VAETrainer, self).__init__(
             dataloader, encoder, decoder, loss_fn, optimizer, gpu, paradigm=paradigm
@@ -466,7 +467,7 @@ class VAETrainer(AETrainer):
         """
         return torch.normal(mu, torch.exp(0.5*logvar))
 
-    def bottleneck(self, h: torch.Tensor) -> None:
+    def bottleneck(self, h: torch.Tensor) -> tuple[torch.Tensor]:
         """
         Processes the embeddings to get the latent space and the mean and log variance.
         """
@@ -481,7 +482,7 @@ class VAETrainer(AETrainer):
         """
         return z + torch.zeros_like(z)
 
-    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor, epoch: int) -> None:
+    def train_batch(self, noisy: torch.Tensor, target: torch.Tensor, labels: torch.Tensor, epoch: int) -> tuple[torch.Tensor]:
         """
         Processes a single training batch of noisy and target images and
         returns the denoised images and the loss tensor. Accepts labels for
@@ -556,6 +557,7 @@ class AE_TRAINED:
     def _load_image(self, path: str) -> torch.Tensor:
         """
         Reads the image at the given path and returns the processed tensor.
+        Output Shape: [1, 1, H, W]
         """
         image = torchvision.io.read_image(path)
         image = torchvision.transforms.functional.to_pil_image(image)
